@@ -1,0 +1,202 @@
+{
+  "version": "0.1",
+  "description": "Benchmark source pairs for generating and reviewing source2launch promotion packs against real open-source launch material.",
+  "items": [
+    {
+      "id": "source2launch-local",
+      "name": "Source2Launch",
+      "sourceType": "local-repo+local-docs",
+      "repo": ".",
+      "paper": null,
+      "promotionReferences": [
+        "README.md",
+        "docs/promotion-benchmark.md",
+        "docs/promotion-style-guide.md",
+        "docs/competitor-benchmark.md"
+      ],
+      "recommendedPlatform": "all",
+      "promptPresets": [
+        "launchkit",
+        "visual"
+      ],
+      "whyUseful": "Uses the current project as a self-benchmark before testing external projects.",
+      "reviewFocus": [
+        "Does the copy explain that source2launch generates platform-ready promotion content from repos, papers, PDFs, and text?",
+        "Does it avoid reverting to old star-growth diagnosis language?",
+        "Does it mention review-before-publish and browser-assisted draft filling accurately?",
+        "Does it propose concrete visuals such as README crops, paper clips, or social cards?"
+      ],
+      "commands": [
+        "source2launch promote . --platform all --prompt-preset launchkit --prompt-preset visual --json --output examples/generated/source2launch-local.json",
+        "source2launch publish examples/generated/source2launch-local.json --platform xhs --publish-mode assist"
+      ]
+    },
+    {
+      "id": "segment-anything",
+      "name": "Segment Anything",
+      "sourceType": "repo+paper+official-blog+demo",
+      "repo": "https://github.com/facebookresearch/segment-anything",
+      "paper": "https://arxiv.org/abs/2304.02643",
+      "promotionReferences": [
+        "https://ai.meta.com/blog/segment-anything-foundation-model-image-segmentation/",
+        "https://segment-anything.com/"
+      ],
+      "recommendedPlatform": "launch",
+      "promptPresets": [
+        "paper",
+        "visual",
+        "launchkit"
+      ],
+      "whyUseful": "A strong reference for turning a research release into a public launch: clear problem, model, dataset, demo, paper, and code.",
+      "reviewFocus": [
+        "Does the generated hook state the image segmentation problem in concrete terms?",
+        "Does it connect code, paper, dataset, and demo without overclaiming?",
+        "Does it recommend visual proof from masks, architecture, dataset scale, or demo screenshots?",
+        "Does it adapt the same source into X/Twitter, Zhihu, Xiaohongshu, WeChat, Product Hunt, and Show HN structures?"
+      ],
+      "commands": [
+        "source2launch promote https://github.com/facebookresearch/segment-anything --platform launch --prompt-preset paper,visual --prompt-preset launchkit --json --output examples/generated/segment-anything.json",
+        "source2launch publish examples/generated/segment-anything.json --platform producthunt --publish-mode review"
+      ]
+    },
+    {
+      "id": "whisper",
+      "name": "Whisper",
+      "sourceType": "repo+paper+official-blog",
+      "repo": "https://github.com/openai/whisper",
+      "paper": "https://arxiv.org/abs/2212.04356",
+      "promotionReferences": [
+        "https://openai.com/index/whisper/",
+        "https://cdn.openai.com/papers/whisper.pdf"
+      ],
+      "recommendedPlatform": "all",
+      "promptPresets": [
+        "paper",
+        "technical",
+        "visual"
+      ],
+      "whyUseful": "A concise launch reference where a model, paper, open-source code, model card, and clear developer use cases are tied together.",
+      "reviewFocus": [
+        "Does the copy explain speech recognition and translation without becoming too generic?",
+        "Does it ground claims in multilingual data, robustness, open-source code, or the model card?",
+        "Does it suggest practical clips such as model architecture, training diagram, or command usage?",
+        "Does it keep caveats about benchmark specialization and zero-shot use visible?"
+      ],
+      "commands": [
+        "source2launch promote https://github.com/openai/whisper --platform all --prompt-preset paper,technical,visual --json --output examples/generated/whisper.json",
+        "source2launch publish examples/generated/whisper.json --platform zhihu --publish-mode review"
+      ]
+    },
+    {
+      "id": "vllm",
+      "name": "vLLM",
+      "sourceType": "repo+paper+technical-blog",
+      "repo": "https://github.com/vllm-project/vllm",
+      "paper": "https://arxiv.org/abs/2309.06180",
+      "promotionReferences": [
+        "https://vllm.ai/blog/2023-06-20-vllm",
+        "https://docs.vllm.ai/en/latest/design/paged_attention/"
+      ],
+      "recommendedPlatform": "launch",
+      "promptPresets": [
+        "launchkit",
+        "technical"
+      ],
+      "whyUseful": "A technical infrastructure launch with a sharp systems claim, named mechanism, performance angle, and installable repo.",
+      "reviewFocus": [
+        "Does the hook name the serving bottleneck or PagedAttention instead of saying only 'faster inference'?",
+        "Does the copy make the try path concrete for developers?",
+        "Does it separate paper evidence from blog explanation?",
+        "Does it avoid unsupported throughput numbers unless the source extraction found them?"
+      ],
+      "commands": [
+        "source2launch promote https://github.com/vllm-project/vllm --platform launch --prompt-preset launchkit,technical --json --output examples/generated/vllm.json",
+        "source2launch publish examples/generated/vllm.json --platform hn --publish-mode assist"
+      ]
+    },
+    {
+      "id": "autogen",
+      "name": "AutoGen",
+      "sourceType": "repo+paper+research-blog",
+      "repo": "https://github.com/microsoft/autogen",
+      "paper": "https://arxiv.org/abs/2308.08155",
+      "promotionReferences": [
+        "https://www.microsoft.com/en-us/research/publication/autogen-enabling-next-gen-llm-applications-via-multi-agent-conversation-framework/",
+        "https://www.microsoft.com/en-us/research/blog/autogen-enabling-next-generation-large-language-model-applications/",
+        "https://microsoft.github.io/autogen/0.2/docs/Use-Cases/agent_chat/"
+      ],
+      "recommendedPlatform": "all",
+      "promptPresets": [
+        "paper",
+        "launchkit",
+        "technical"
+      ],
+      "whyUseful": "A good agent-framework example with paper framing, docs, blog positioning, human-in-the-loop language, and platform-specific launch potential.",
+      "reviewFocus": [
+        "Does the generated content explain multi-agent conversation with concrete workflow examples?",
+        "Does it mention human feedback and tool use without implying unsafe autonomy?",
+        "Does it account for the repository's current maintenance-mode status if the source extractor sees it?",
+        "Does the long-form version read like a credible technical explanation rather than a broad AI-agent advertisement?"
+      ],
+      "commands": [
+        "source2launch promote https://github.com/microsoft/autogen --platform all --prompt-preset paper,launchkit,technical --json --output examples/generated/autogen.json",
+        "source2launch publish examples/generated/autogen.json --platform linkedin --publish-mode review"
+      ]
+    },
+    {
+      "id": "llava",
+      "name": "LLaVA",
+      "sourceType": "repo+paper+project-page",
+      "repo": "https://github.com/haotian-liu/LLaVA",
+      "paper": "https://arxiv.org/abs/2304.08485",
+      "promotionReferences": [
+        "https://llava-vl.github.io/"
+      ],
+      "recommendedPlatform": "all",
+      "promptPresets": [
+        "paper",
+        "visual",
+        "zhihu",
+        "xhs"
+      ],
+      "whyUseful": "A multimodal research project where paper, demo, data, model, and visual examples can be turned into social posts and carousel cards.",
+      "reviewFocus": [
+        "Does the copy explain visual instruction tuning in plain language?",
+        "Does it call out demo and visual examples early?",
+        "Does the Xiaohongshu version become a carousel plan rather than a generic paragraph?",
+        "Does it avoid making capability claims beyond what the project page or paper supports?"
+      ],
+      "commands": [
+        "source2launch promote https://github.com/haotian-liu/LLaVA --platform all --prompt-preset paper,visual,zhihu,xhs --json --output examples/generated/llava.json",
+        "source2launch publish examples/generated/llava.json --platform xhs --publish-mode assist"
+      ]
+    },
+    {
+      "id": "dify",
+      "name": "Dify",
+      "sourceType": "repo+product-page",
+      "repo": "https://github.com/langgenius/dify",
+      "paper": null,
+      "promotionReferences": [
+        "https://dify.ai/"
+      ],
+      "recommendedPlatform": "launch",
+      "promptPresets": [
+        "launchkit",
+        "technical",
+        "visual"
+      ],
+      "whyUseful": "A product-led open-source benchmark where the reference material is closer to SaaS positioning than a research paper.",
+      "reviewFocus": [
+        "Does the generated launch copy explain who builds with it and what they can ship?",
+        "Does it show a workflow/RAG/agent/product angle without stuffing every feature into the hook?",
+        "Does it suggest product screenshots or workflow diagrams for image generation?",
+        "Does the Show HN version stay plain and tryable?"
+      ],
+      "commands": [
+        "source2launch promote https://github.com/langgenius/dify --platform launch --prompt-preset launchkit,technical,visual --json --output examples/generated/dify.json",
+        "source2launch publish examples/generated/dify.json --platform producthunt --publish-mode review"
+      ]
+    }
+  ]
+}

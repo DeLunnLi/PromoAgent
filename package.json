@@ -1,0 +1,66 @@
+{
+  "name": "source2launch",
+  "version": "0.2.0",
+  "description": "AI reads open source repos, papers, and PDFs to generate project briefs, Markdown docs, multi-platform promo copy, and launch images.",
+  "type": "module",
+  "author": "DeLunnLi",
+  "bin": {
+    "source2launch": "./bin/source2launch",
+    "source2launch-api": "./bin/source2launch-api"
+  },
+  "files": [
+    ".env.example",
+    ".source2launchrc.example",
+    "bin",
+    "source2launch/*.py",
+    "docs",
+    "examples",
+    "templates",
+    "scripts/modelscope-image-edit.py",
+    "scripts/test-and-generate.sh",
+    "pyproject.toml",
+    "README.md",
+    "PROJECT_INTRO.md",
+    "OPTIMIZATION_SUMMARY.md"
+  ],
+  "scripts": {
+    "check": "npm run test:python && npm pack --dry-run",
+    "doctor": "python3 -m source2launch.cli .",
+    "promote": "python3 -m source2launch.cli promote . --platform all",
+    "optimize": "python3 -m source2launch.cli optimize . --output launch-assets/",
+    "prepublishOnly": "npm run test:python",
+    "test": "npm run test:python",
+    "test:js": "node --test test/*.test.js",
+    "test:python": "python3 -m unittest discover -s tests_py -v"
+  },
+  "keywords": [
+    "ai",
+    "github",
+    "open-source",
+    "readme",
+    "paper",
+    "launch",
+    "promotion",
+    "launch-assets",
+    "content-generation",
+    "prompt",
+    "prompt-engineering",
+    "developer-tools",
+    "xiaohongshu",
+    "wechat",
+    "cli"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "homepage": "https://github.com/DeLunnLi/Source2Launch#readme",
+  "bugs": {
+    "url": "https://github.com/DeLunnLi/Source2Launch/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DeLunnLi/Source2Launch.git"
+  },
+  "license": "MIT"
+}

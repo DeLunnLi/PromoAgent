@@ -1,0 +1,14 @@
+node_modules/
+coverage/
+__pycache__/
+*.py[cod]
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+launch-assets/
+promo-image.jpg
+*.generated.jpg
+.cursor/
+.cursor*

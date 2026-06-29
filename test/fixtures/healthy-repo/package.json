@@ -1,0 +1,20 @@
+{
+  "name": "repo-pulse",
+  "version": "1.0.0",
+  "description": "Generate technical social posts from repository evidence.",
+  "bin": {
+    "repo-pulse": "./bin/repo-pulse.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/example/repo-pulse.git"
+  },
+  "keywords": [
+    "github",
+    "readme",
+    "open-source",
+    "tweet",
+    "social"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,22 @@
+Source2Launch · 项目/论文发布内容生成器
+
+目标    .
+项目    source2launch
+资料检查 已生成本地检查报告
+
+主路径
+  source2launch promote . --platform all
+  source2launch optimize . --output launch-assets/
+  source2launch markdown . --markdown-type launch --output LAUNCH.md
+
+生成内容
+  project-summary.md
+  promo-xhs.md
+  promo-zhihu.md
+  promo-wechat.md
+  promo-en.md
+  promo-copy.md
+  images/
+
+审核提醒
+  确认文案中的命令、论文结论、截图和平台标签均来自真实来源证据。

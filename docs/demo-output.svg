@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="640" viewBox="0 0 1120 640" role="img" aria-labelledby="title desc">
+  <title id="title">Source2Launch promotion pack output</title>
+  <desc id="desc">A terminal preview showing Source2Launch generating cross-platform promotion copy from source evidence.</desc>
+  <rect width="1120" height="640" fill="#0f1419"/>
+  <rect x="40" y="32" width="1040" height="576" rx="10" fill="#151c22" stroke="#2f3d49"/>
+  <circle cx="76" cy="66" r="7" fill="#f0524f"/>
+  <circle cx="100" cy="66" r="7" fill="#f2c14e"/>
+  <circle cx="124" cy="66" r="7" fill="#46bd6d"/>
+  <text x="64" y="112" fill="#8bd5ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="20">$ source2launch promote https://github.com/user/repo</text>
+  <text x="64" y="158" fill="#eef4f8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="28" font-weight="700">AI promotion pack (OpenAI / gpt-4.1-mini)</text>
+  <text x="64" y="208" fill="#e8edf2" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="22" font-weight="700">Source brief</text>
+  <text x="64" y="242" fill="#c6d1dc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">Summary: a developer tool that turns repository evidence into social posts.</text>
+  <text x="64" y="286" fill="#f7c66b" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="19">Single tweet</text>
+  <text x="64" y="320" fill="#c6d1dc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">I built a CLI that reads a repo or paper and drafts grounded promotion copy:</text>
+  <text x="64" y="352" fill="#c6d1dc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">tweet, thread, Zhihu answer, Xiaohongshu note, WeChat article, and caveats.</text>
+  <text x="64" y="406" fill="#e8edf2" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="22" font-weight="700">Thread</text>
+  <text x="64" y="442" fill="#9ee493" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">1. Start from source evidence, not a blank marketing prompt.</text>
+  <text x="64" y="474" fill="#9ee493" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">2. Extract what it is, who it helps, and what claims are supported.</text>
+  <text x="64" y="506" fill="#9ee493" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">3. Generate publish-ready variants for X/Twitter, Zhihu, XHS, and WeChat.</text>
+  <text x="64" y="560" fill="#c6d1dc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">Image ideas: source card, answer header, technical highlight carousel</text>
+</svg>
