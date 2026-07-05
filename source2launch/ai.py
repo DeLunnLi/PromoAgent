@@ -88,11 +88,12 @@ def generate_ai_content(
     examples: list[str] | None = None,
     options: dict[str, Any] | None = None,
     env: dict[str, str] | None = None,
-    stream: bool | None = None,      # None = auto-detect from env
-    validate: bool = True,           # run post-generation validation
-    auto_fix: bool = True,           # attempt one auto-fix call if issues found
+    stream: bool | None = None,
+    validate: bool = True,
+    auto_fix: bool = True,
+    compare_with_examples: bool = True,  # auto-compare with Stage 1 examples
 ) -> dict[str, Any]:
-    """Stage 2: generate promotional content with optional streaming, validation, and auto-fix."""
+    """Stage 2: generate promotional content with streaming, validation, auto-fix, and example comparison."""
     config = ai_config(options, env)
     if not config["apiKey"]:
         raise RuntimeError("Missing AI API key. Set SOURCE2LAUNCH_API_KEY or SOURCE2LAUNCH_MODELSCOPE_API_KEY.")
@@ -143,9 +144,142 @@ def generate_ai_content(
                     parsed = fixed
                     print("source2launch: ✓ issues fixed automatically", file=sys.stderr)
 
+    # --- Stage 3: compare with examples and auto-improve ---
+    if compare_with_examples and examples and parsed:
+        improved = _compare_and_improve(parsed, examples, messages, base_body, url, headers, config)
+        if improved:
+            parsed = improved
+
     return {
         "content": parsed,
         "rawContent": raw_content,
+        "messages": messages,       # saved for multi-turn refinement
+        "model": config["model"],
+        "baseUrl": config["baseUrl"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: compare generated content with reference examples and improve
+# ---------------------------------------------------------------------------
+
+_COMPARE_PROMPT = """\
+你刚刚生成了以下推广内容（JSON 格式）。
+我们还有一些同类优质内容的参考示例。
+
+请对比生成内容和参考示例，找出 2-3 个结构或风格上的改进点（不是内容上的，是写法上的）：
+- 开头方式是否够吸引人？
+- 段落节奏和层次是否清晰？
+- 平台原生感是否足够？
+
+如果有明显差距，直接输出改进后的完整 JSON（与上次格式完全一致）。
+如果整体质量已经很好，输出原始 JSON 不做修改。
+
+参考示例：
+{examples_text}
+
+只输出 JSON，不要任何解释。
+"""
+
+
+def _compare_and_improve(
+    content: dict[str, Any],
+    examples: list[str],
+    original_messages: list[dict[str, str]],
+    base_body: dict[str, Any],
+    url: str,
+    headers: dict[str, str],
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Compare generated content with examples and run one improvement pass."""
+    examples_text = "\n\n---\n\n".join(ex[:600] for ex in examples[:2])
+    compare_messages = [
+        *original_messages,
+        {"role": "assistant", "content": json.dumps(content, ensure_ascii=False)},
+        {"role": "user", "content": _COMPARE_PROMPT.format(examples_text=examples_text)},
+    ]
+    print("source2launch: comparing with examples and refining…", file=sys.stderr)
+    try:
+        response = post_json(url, {**base_body, "messages": compare_messages},
+                             headers=headers, timeout=config["timeout"])
+        raw = extract_chat_content(response)
+        improved = parse_json_content(raw)
+        # Only use if the response is a valid promo dict
+        if isinstance(improved, dict) and improved.get("promotions"):
+            return improved
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Multi-turn refinement
+# ---------------------------------------------------------------------------
+
+def refine_content(
+    previous_result: dict[str, Any],
+    feedback: str,
+    *,
+    platform: str | None = None,
+    options: dict[str, Any] | None = None,
+    env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Refine previously generated content based on user feedback.
+
+    previous_result must contain 'messages' (the conversation so far)
+    and 'content' (the previous AI output).
+    """
+    config = ai_config(options, env)
+    if not config["apiKey"]:
+        raise RuntimeError("Missing AI API key.")
+
+    messages = previous_result.get("messages") or []
+    prev_content = previous_result.get("content") or {}
+
+    if not messages:
+        raise ValueError(
+            "No conversation context found. "
+            "Run promote/optimize first to generate content before refining."
+        )
+
+    platform_hint = f"重点修改 {platform} 平台的内容。" if platform else "可以修改任何平台的内容。"
+    refine_message = (
+        f"{feedback}\n\n"
+        f"{platform_hint}"
+        "保持 JSON 结构不变，输出完整修改后的 JSON。"
+    )
+
+    refine_messages = [
+        *messages,
+        {"role": "assistant", "content": json.dumps(prev_content, ensure_ascii=False)},
+        {"role": "user", "content": refine_message},
+    ]
+
+    url = f"{config['baseUrl']}/chat/completions"
+    headers = {"Authorization": f"Bearer {config['apiKey']}"}
+    body: dict[str, Any] = {
+        "model": config["model"],
+        "messages": refine_messages,
+        "temperature": config["temperature"],
+        "max_tokens": config["maxTokens"],
+    }
+
+    print("source2launch: refining content…", file=sys.stderr)
+    try:
+        response = post_json(url, {**body, "response_format": {"type": "json_object"}},
+                             headers=headers, timeout=config["timeout"])
+    except RuntimeError as exc:
+        if any(kw in str(exc).lower() for kw in ("response_format", "json_object", "unsupported")):
+            response = post_json(url, body, headers=headers, timeout=config["timeout"])
+        else:
+            raise
+
+    raw = extract_chat_content(response)
+    refined = parse_json_content(raw)
+    return {
+        "content": refined,
+        "rawContent": raw,
+        "messages": refine_messages,
         "model": config["model"],
         "baseUrl": config["baseUrl"],
     }

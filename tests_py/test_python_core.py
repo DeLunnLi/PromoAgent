@@ -10,7 +10,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from source2launch.ai import generate_ai_content, parse_json_content, validate_content
+from source2launch.ai import generate_ai_content, parse_json_content, refine_content, validate_content
 from source2launch.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
 from source2launch.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
 from source2launch.examples import detect_category, find_examples, format_examples_for_prompt
@@ -521,6 +521,70 @@ class PythonCoreTest(unittest.TestCase):
         self.assertTrue(_is_openai_model("dall-e-3"))
         self.assertFalse(_is_openai_model("Qwen/Qwen-Image"))
         self.assertFalse(_is_openai_model("stabilityai/stable-diffusion"))
+
+    # ------------------------------------------------------------------
+    # Multi-turn refinement + example comparison
+    # ------------------------------------------------------------------
+
+    def test_refine_content_with_mock_server(self):
+        """refine_content() appends feedback to conversation and calls AI again."""
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        server = MockChatServer(sample_ai_content())
+        server.start()
+        try:
+            # Simulate a previous generation result with messages saved
+            previous_result = {
+                "messages": [
+                    {"role": "system", "content": "You are a promo editor."},
+                    {"role": "user", "content": "Generate promo for repo-pulse."},
+                ],
+                "content": sample_ai_content(),
+                "model": "test-model",
+                "baseUrl": server.base_url,
+            }
+            refined = refine_content(
+                previous_result,
+                "小红书那条太广告感了，改得更自然一些",
+                options={"base_url": server.base_url, "api_key": "test-key", "model": "test-model"},
+            )
+        finally:
+            server.stop()
+
+        # Should have extended conversation
+        self.assertIn("content", refined)
+        self.assertIn("messages", refined)
+        msgs = refined["messages"]
+        # Original 2 messages + assistant response + user feedback = 4 messages
+        self.assertGreaterEqual(len(msgs), 4)
+        # Last user message contains the feedback
+        self.assertIn("广告感", msgs[-1]["content"])
+
+    def test_generate_ai_content_saves_messages(self):
+        """generate_ai_content returns messages for subsequent refinement."""
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        server = MockChatServer(sample_ai_content())
+        server.start()
+        try:
+            ai_result = generate_ai_content(result, platform="xhs", options={
+                "base_url": server.base_url,
+                "api_key": "test-key",
+                "model": "test-model",
+            }, compare_with_examples=False)
+        finally:
+            server.stop()
+
+        self.assertIn("messages", ai_result)
+        self.assertIsInstance(ai_result["messages"], list)
+        self.assertGreater(len(ai_result["messages"]), 0)
+
+    def test_refine_raises_without_context(self):
+        """refine_content raises ValueError when no messages in previous result."""
+        with self.assertRaises(ValueError):
+            refine_content(
+                {"content": {}, "messages": []},
+                "改一下",
+                options={"api_key": "test-key"},
+            )
 
     def test_dotenv_loads_keys_not_already_in_environ(self):
         with tempfile.TemporaryDirectory() as tmp:

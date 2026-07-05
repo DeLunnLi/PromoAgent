@@ -7,10 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .ai import build_promo_payload, generate_ai_content, has_ai_key
+from .ai import build_promo_payload, generate_ai_content, has_ai_key, refine_content
 from .analyzer import analyze_target
 from .optimize import run_optimize
 from .promo_prompts import build_evidence_brief, build_promo_system_prompt, build_promo_user_prompt, expand_presets
+
+# File where the last generation context is saved for multi-turn refinement
+_SESSION_FILE = ".s2l-session.json"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,6 +25,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_promote(args)
         if args.command == "optimize":
             return _run_optimize(args)
+        if args.command == "refine":
+            return _run_refine(args)
         return _run_analyze(args)
     except Exception as error:  # noqa: BLE001
         print(f"source2launch: {error}", file=sys.stderr)
@@ -73,6 +78,15 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Override image model ID (default: from SOURCE2LAUNCH_IMAGE_MODEL or Qwen/Qwen-Image).")
     _add_ai_options(optimize)
     _add_context_options(optimize)
+
+    # refine
+    refine = sub.add_parser("refine", help="Refine previously generated content with feedback.")
+    refine.add_argument("feedback", help="What to change, e.g. \"小红书那条太广告感了，改得更像真实探店\".")
+    refine.add_argument("--platform", default=None, help="Focus refinement on a specific platform.")
+    refine.add_argument("--session", default=_SESSION_FILE,
+                        help=f"Path to saved session file (default: {_SESSION_FILE}).")
+    refine.add_argument("-o", "--output", help="Write refined output to a file.")
+    _add_ai_options(refine)
 
     return parser
 
@@ -137,6 +151,7 @@ def _run_promote(args: argparse.Namespace) -> int:
 
     if args.ai:
         ai_result = _call_ai(result, platform=platform, brief=brief, args=args)
+        _save_session(ai_result, result)   # save for multi-turn refinement
         if args.json:
             output = json.dumps({
                 "ai": {"content": ai_result["content"], "model": ai_result["model"]},
@@ -144,6 +159,7 @@ def _run_promote(args: argparse.Namespace) -> int:
             }, ensure_ascii=False, indent=2)
         else:
             output = _format_ai_output(result, ai_result["content"])
+            print(f"\n💡 Tip: run `source2launch refine \"<your feedback>\"` to refine any platform's content.", file=sys.stderr)
     elif args.json:
         output = json.dumps({
             "platform": platform,
@@ -317,6 +333,66 @@ def _format_ai_output(result: dict[str, Any], content: dict[str, Any]) -> str:
     if len(lines) <= 4:
         lines.append(json.dumps(content, ensure_ascii=False, indent=2))
     return "\n".join(lines).rstrip()
+
+
+def _run_refine(args: argparse.Namespace) -> int:
+    session_path = Path(args.session)
+    if not session_path.exists():
+        print(
+            f"source2launch: session file not found: {session_path}\n"
+            "Run `source2launch promote ... --ai` first to generate content.",
+            file=sys.stderr,
+        )
+        return 1
+
+    previous = json.loads(session_path.read_text(encoding="utf-8"))
+    options = {
+        "model": getattr(args, "model", None),
+        "base_url": getattr(args, "base_url", None),
+        "max_tokens": getattr(args, "max_tokens", None),
+        "temperature": getattr(args, "temperature", None),
+    }
+
+    try:
+        ai_result = refine_content(
+            previous,
+            args.feedback,
+            platform=getattr(args, "platform", None),
+            options=options,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"source2launch: {exc}", file=sys.stderr)
+        return 1
+
+    # Save updated session
+    _save_session(ai_result)
+
+    output = _format_ai_output(
+        previous.get("result") or {"project": {}},
+        ai_result["content"],
+    )
+    _write_or_print(output, getattr(args, "output", None))
+    print("\n✓ Content refined. Run `refine` again to continue.", file=sys.stderr)
+    return 0
+
+
+def _save_session(ai_result: dict[str, Any], result: dict[str, Any] | None = None) -> None:
+    """Save generation context for multi-turn refinement."""
+    session = {
+        "messages": ai_result.get("messages") or [],
+        "content": ai_result.get("content") or {},
+        "model": ai_result.get("model"),
+        "baseUrl": ai_result.get("baseUrl"),
+    }
+    if result:
+        session["result"] = result
+    try:
+        Path(_SESSION_FILE).write_text(
+            json.dumps(session, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # Session save failure is non-fatal
 
 
 def _write_or_print(output: str, path: str | None) -> None:
