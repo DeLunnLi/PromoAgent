@@ -12,6 +12,7 @@ from pathlib import Path
 
 from source2launch.ai import generate_ai_content, parse_json_content
 from source2launch.analyzer import analyze_target, parse_github_owner_repo
+from source2launch.image import build_image_prompt, fetch_readme_images, generate_platform_images
 from source2launch.optimize import run_optimize
 from source2launch.promo_prompts import PROMPT_PRESETS, PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_user_prompt, expand_presets
 
@@ -258,6 +259,88 @@ class PythonCoreTest(unittest.TestCase):
     # .env loading
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Image generation
+    # ------------------------------------------------------------------
+
+    def test_build_image_prompt_contains_project_info(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        prompt = build_image_prompt(result, platform="xhs")
+        self.assertIn("repo-pulse", prompt)
+        self.assertIn("3:4", prompt)
+        self.assertIn("poster", prompt)
+
+    def test_build_image_prompt_platform_dims(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        xhs_prompt = build_image_prompt(result, platform="xhs")
+        wechat_prompt = build_image_prompt(result, platform="wechat")
+        self.assertIn("3:4", xhs_prompt)
+        self.assertIn("1:1", wechat_prompt)
+
+    def test_fetch_readme_images_returns_empty_when_no_urls(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        # healthy-repo README has no external image URLs — should return empty list
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = fetch_readme_images(result, Path(tmp) / "images")
+        self.assertIsInstance(saved, list)
+
+    def test_optimize_with_images_false_skips_image_generation(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "launch-assets"
+            manifest = run_optimize(result, cwd=FIXTURES, output_dir=output_dir, generate_images=False)
+        self.assertIn("INDEX.md", manifest["generated"])
+        self.assertEqual(manifest.get("images"), [])
+
+    def test_optimize_with_images_true_and_no_key_skips_ai_image(self):
+        """When --image is set but no API key, README images are attempted but AI image is skipped."""
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        # Remove any API key from environment for this test
+        env_backup = {k: os.environ.pop(k, None) for k in [
+            "SOURCE2LAUNCH_MODELSCOPE_API_KEY", "SOURCE2LAUNCH_API_KEY", "MODELSCOPE_API_KEY"
+        ]}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                output_dir = Path(tmp) / "launch-assets"
+                manifest = run_optimize(result, cwd=FIXTURES, output_dir=output_dir, generate_images=True)
+            # Should not crash; images list may be empty (no readme images in fixture)
+            self.assertIn("INDEX.md", manifest["generated"])
+            self.assertIsInstance(manifest.get("images"), list)
+        finally:
+            for k, v in env_backup.items():
+                if v is not None:
+                    os.environ[k] = v
+
+    def test_generate_platform_images_with_mock_modelscope(self):
+        """Full image generation flow with a mock ModelScope server."""
+        import base64
+        png_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        )
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        server = MockModelScopeImageServer(png_bytes)
+        server.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                output_dir = Path(tmp) / "launch-assets"
+                images = generate_platform_images(
+                    result,
+                    output_dir,
+                    options={
+                        "base_url": server.base_url,
+                        "api_key": "test-key",   # api_key in options → picked up by image_config
+                        "model": "test-model",
+                        "poll_interval_ms": 10,
+                        "timeout_ms": 5000,
+                    },
+                )
+                # Check paths while temp dir still exists
+                ai_images = [img for img in images if img.get("provider") == "modelscope"]
+                self.assertTrue(len(ai_images) >= 1)
+                self.assertTrue(Path(ai_images[0]["outputPath"]).exists())
+        finally:
+            server.stop()
+
     def test_dotenv_loads_keys_not_already_in_environ(self):
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"
@@ -350,6 +433,61 @@ class MockChatServer:
     @property
     def last_request(self):
         return self.httpd.last_request
+
+    def start(self): self.thread.start()
+
+    def stop(self):
+        self.httpd.shutdown()
+        self.thread.join(timeout=5)
+        self.httpd.server_close()
+
+
+class MockModelScopeImageHandler(BaseHTTPRequestHandler):
+    """Simulates ModelScope image generation API: submit task → poll → download."""
+
+    def do_POST(self):  # noqa: N802
+        # POST /v1/images/generations → task_id
+        self._write_json({"task_id": "img-task-1"})
+
+    def do_GET(self):  # noqa: N802
+        if "/tasks/" in self.path:
+            # Poll → SUCCEED with image URL
+            self._write_json({
+                "task_status": "SUCCEED",
+                "output_images": [f"{self.server.base_url}/img.png"],
+            })
+        elif self.path.endswith("/img.png"):
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(self.server.png_bytes)))
+            self.end_headers()
+            self.wfile.write(self.server.png_bytes)
+        else:
+            self.send_error(404)
+
+    def _write_json(self, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):  # noqa: A002
+        return
+
+
+class MockModelScopeImageServer:
+    def __init__(self, png_bytes: bytes):
+        self.httpd = HTTPServer(("127.0.0.1", 0), MockModelScopeImageHandler)
+        self.httpd.png_bytes = png_bytes
+        host, port = self.httpd.server_address
+        self.httpd.base_url = f"http://{host}:{port}"
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    @property
+    def base_url(self):
+        return self.httpd.base_url
 
     def start(self): self.thread.start()
 

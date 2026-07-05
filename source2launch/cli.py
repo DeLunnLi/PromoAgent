@@ -58,6 +58,11 @@ def _build_parser() -> argparse.ArgumentParser:
     optimize.add_argument("--output", "--output-dir", dest="output_dir", default="launch-assets",
                           help="Output directory (default: launch-assets).")
     optimize.add_argument("--ai", action="store_true", help="Call the configured AI model to generate copy.")
+    optimize.add_argument("--image", action="store_true",
+                          help="Also generate cover images (README screenshots + AI cover). "
+                               "Requires SOURCE2LAUNCH_MODELSCOPE_API_KEY for AI images.")
+    optimize.add_argument("--image-model", dest="image_model", default=None,
+                          help="Override image model ID (default: from SOURCE2LAUNCH_IMAGE_MODEL or Qwen/Qwen-Image).")
     _add_ai_options(optimize)
     _add_context_options(optimize)
 
@@ -152,15 +157,23 @@ def _run_promote(args: argparse.Namespace) -> int:
 def _run_optimize(args: argparse.Namespace) -> int:
     result = analyze_target(args.target)
     ai_result = _call_ai(result, platform="all", brief=_build_brief(args), args=args) if args.ai else None
+    image_options = {"model": getattr(args, "image_model", None)} if getattr(args, "image", False) else None
     manifest = run_optimize(
         result,
         cwd=Path.cwd(),
         output_dir=args.output_dir,
         ai_content=ai_result.get("content") if ai_result else None,
         ai_model=ai_result.get("model") if ai_result else None,
+        generate_images=getattr(args, "image", False),
+        image_options=image_options,
     )
     print(f"Source2Launch · launch assets saved to {manifest['outputDir']}")
-    print(f"Files: {len(manifest['generated'])}")
+    print(f"Text files : {len(manifest['generated'])}")
+    images = manifest.get("images") or []
+    if images:
+        print(f"Images     : {len(images)}")
+        for img in images:
+            print(f"  {Path(img.get('outputPath', '')).name}")
     for f in manifest["generated"]:
         print(f"  {f}")
     return 0

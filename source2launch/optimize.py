@@ -1,6 +1,8 @@
 """Generate a launch-assets directory from source evidence and optional AI content."""
 from __future__ import annotations
 
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,8 @@ def run_optimize(
     output_dir: str | Path | None = None,
     ai_content: dict[str, Any] | None = None,
     ai_model: str | None = None,
+    generate_images: bool = False,
+    image_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(cwd or ".").resolve()
     out = Path(output_dir or DEFAULT_OUTPUT_DIR)
@@ -45,24 +49,36 @@ def run_optimize(
     out.mkdir(parents=True, exist_ok=True)
 
     generated: list[str] = []
+    images: list[dict[str, Any]] = []
     project = result.get("project", {})
     evidence = result.get("evidence", {})
 
-    # 1. Evidence summary
-    write_file(out / "evidence-summary.md", _evidence_summary(project, evidence), generated)
+    if generate_images:
+        # Run text writing and image generation in parallel
+        from .image import generate_platform_images
 
-    # 2. Platform promo files from AI content
-    promotions = (ai_content or {}).get("promotions", {})
-    for key, filename in PLATFORM_FILES.items():
-        item = promotions.get(key)
-        content = _extract_markdown(item)
-        if content:
-            write_file(out / filename, content, generated)
-        else:
-            write_file(out / filename, _placeholder(PLATFORM_LABELS[key], project), generated)
+        def _write_text() -> None:
+            _write_promo_files(out, project, evidence, ai_content, generated)
 
-    # 3. INDEX.md
-    write_file(out / "INDEX.md", _index(project, generated, ai_model), generated)
+        def _write_images() -> list[dict[str, Any]]:
+            return generate_platform_images(result, out, image_options)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            text_future  = executor.submit(_write_text)
+            image_future = executor.submit(_write_images)
+
+            # Collect results; propagate text errors, swallow image errors
+            text_future.result()
+            try:
+                images = image_future.result()
+            except Exception as exc:  # noqa: BLE001
+                print(f"source2launch: image generation failed: {exc}", file=sys.stderr)
+    else:
+        _write_promo_files(out, project, evidence, ai_content, generated)
+
+    # INDEX.md (after both futures complete)
+    image_names = [Path(img["outputPath"]).name for img in images if img.get("outputPath")]
+    write_file(out / "INDEX.md", _index(project, generated, ai_model, image_names), generated)
 
     return {
         "project": project.get("name"),
@@ -70,7 +86,24 @@ def run_optimize(
         "promoSource": "ai" if ai_content else "unavailable",
         "promoModel": ai_model,
         "generated": generated,
+        "images": images,
     }
+
+
+def _write_promo_files(
+    out: Path,
+    project: dict[str, Any],
+    evidence: dict[str, Any],
+    ai_content: dict[str, Any] | None,
+    generated: list[str],
+) -> None:
+    """Write evidence summary and all platform promo files."""
+    write_file(out / "evidence-summary.md", _evidence_summary(project, evidence), generated)
+    promotions = (ai_content or {}).get("promotions", {})
+    for key, filename in PLATFORM_FILES.items():
+        item = promotions.get(key)
+        content = _extract_markdown(item)
+        write_file(out / filename, content if content else _placeholder(PLATFORM_LABELS[key], project), generated)
 
 
 def write_file(path: Path, content: str, manifest: list[str]) -> None:
@@ -132,7 +165,12 @@ def _placeholder(label: str, project: dict[str, Any]) -> str:
     ])
 
 
-def _index(project: dict[str, Any], generated: list[str], model: str | None) -> str:
+def _index(
+    project: dict[str, Any],
+    generated: list[str],
+    model: str | None,
+    image_names: list[str] | None = None,
+) -> str:
     name = project.get("name", "Project")
     model_str = f" · model: {model}" if model else ""
     lines = [
@@ -144,7 +182,12 @@ def _index(project: dict[str, Any], generated: list[str], model: str | None) -> 
         "",
     ]
     for f in generated:
-        lines.append(f"- [{f}]({f})")
+        if f != "INDEX.md":
+            lines.append(f"- [{f}]({f})")
+    if image_names:
+        lines += ["", "## Images", ""]
+        for img in image_names:
+            lines.append(f"- [images/{img}](images/{img})")
     lines += [
         "",
         "## Review Before Publishing",
