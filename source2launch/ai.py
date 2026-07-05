@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import urllib.error
 import urllib.request
 from typing import Any
@@ -87,10 +88,19 @@ def generate_ai_content(
     examples: list[str] | None = None,
     options: dict[str, Any] | None = None,
     env: dict[str, str] | None = None,
+    stream: bool | None = None,      # None = auto-detect from env
+    validate: bool = True,           # run post-generation validation
+    auto_fix: bool = True,           # attempt one auto-fix call if issues found
 ) -> dict[str, Any]:
+    """Stage 2: generate promotional content with optional streaming, validation, and auto-fix."""
     config = ai_config(options, env)
     if not config["apiKey"]:
         raise RuntimeError("Missing AI API key. Set SOURCE2LAUNCH_API_KEY or SOURCE2LAUNCH_MODELSCOPE_API_KEY.")
+
+    # Streaming: env var or explicit param
+    env = env or os.environ
+    use_stream = stream if stream is not None else env.get("SOURCE2LAUNCH_STREAM", "").lower() == "true"
+
     messages = build_promo_messages(result, platform=platform, brief_section=brief_section, examples=examples)
     url = f"{config['baseUrl']}/chat/completions"
     headers = {"Authorization": f"Bearer {config['apiKey']}"}
@@ -100,23 +110,179 @@ def generate_ai_content(
         "temperature": config["temperature"],
         "max_tokens": config["maxTokens"],
     }
-    # Try with response_format first; fall back if the provider does not support it.
-    try:
-        response = post_json(url, {**base_body, "response_format": {"type": "json_object"}}, headers=headers, timeout=config["timeout"])
-    except RuntimeError as exc:
-        err = str(exc).lower()
-        if "response_format" in err or "json_object" in err or "unsupported" in err or "invalid" in err:
-            response = post_json(url, base_body, headers=headers, timeout=config["timeout"])
-        else:
-            raise
-    content = extract_chat_content(response)
-    parsed = parse_json_content(content)
+
+    # --- Call AI (with streaming or not) ---
+    if use_stream:
+        raw_content = _stream_and_collect(url, base_body, headers=headers, timeout=config["timeout"])
+    else:
+        print("source2launch: generating content…", file=sys.stderr)
+        try:
+            response = post_json(url, {**base_body, "response_format": {"type": "json_object"}}, headers=headers, timeout=config["timeout"])
+        except RuntimeError as exc:
+            err = str(exc).lower()
+            if "response_format" in err or "json_object" in err or "unsupported" in err or "invalid" in err:
+                response = post_json(url, base_body, headers=headers, timeout=config["timeout"])
+            else:
+                raise
+        raw_content = extract_chat_content(response)
+
+    parsed = parse_json_content(raw_content)
+
+    # --- Validate output ---
+    if validate:
+        issues = validate_content(parsed, result)
+        if issues:
+            print(f"source2launch: found {len(issues)} issue(s) in generated content:", file=sys.stderr)
+            for issue in issues:
+                print(f"  ⚠ [{issue['platform']}] {issue['message']}", file=sys.stderr)
+
+            # Auto-fix: one follow-up call to address the issues
+            if auto_fix:
+                fixed = _auto_fix(parsed, issues, messages, base_body, url, headers, config)
+                if fixed:
+                    parsed = fixed
+                    print("source2launch: ✓ issues fixed automatically", file=sys.stderr)
+
     return {
         "content": parsed,
-        "rawContent": content,
+        "rawContent": raw_content,
         "model": config["model"],
         "baseUrl": config["baseUrl"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Streaming
+# ---------------------------------------------------------------------------
+
+def _stream_and_collect(url: str, base_body: dict[str, Any], *, headers: dict[str, str], timeout: float) -> str:
+    """Call the streaming API and print tokens as they arrive. Returns full content."""
+    body = {**base_body, "stream": True}
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST",
+                                  headers={"Content-Type": "application/json", **headers})
+    buffer = ""
+    print("source2launch: generating", end=" ", file=sys.stderr, flush=True)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8").strip()
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                delta = (chunk.get("choices") or [{}])[0].get("delta", {}).get("content") or ""
+                if delta:
+                    buffer += delta
+                    # Print a dot every ~200 chars as progress indicator
+                    if len(buffer) % 200 < len(delta):
+                        print(".", end="", file=sys.stderr, flush=True)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"AI stream request failed with HTTP {exc.code}: {detail}") from exc
+    print(" done", file=sys.stderr)
+    return buffer
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+_BANNED_WORDS = ["必备", "神器", "高质量", "颠覆", "最强", "完美", "爆款", "轻松搞定", "一键", "秒变"]
+
+
+def validate_content(content: dict[str, Any], result: dict[str, Any]) -> list[dict[str, str]]:
+    """Check common quality issues in the generated content.
+
+    Returns a list of issue dicts: {"platform": ..., "message": ...}
+    """
+    issues: list[dict[str, str]] = []
+    promotions = content.get("promotions") or {}
+    project = result.get("project", {})
+    evidence = result.get("evidence", {})
+
+    cta = (
+        project.get("cta")
+        or project.get("installCommand")
+        or project.get("homepage")
+        or project.get("repositoryUrl")
+    )
+
+    for platform, post in promotions.items():
+        if not isinstance(post, dict):
+            continue
+        md = post.get("markdown") or ""
+        if not md:
+            continue
+
+        # Check banned words
+        found_banned = [w for w in _BANNED_WORDS if w in md]
+        if found_banned:
+            issues.append({"platform": platform, "message": f"含禁用词：{', '.join(found_banned)}"})
+
+        # Check CTA is referenced (only if we have one)
+        if cta and len(cta) > 5 and cta not in md:
+            issues.append({"platform": platform, "message": f"CTA 未被引用（应包含：{cta[:40]}）"})
+
+    # XHS title length
+    xhs = promotions.get("xiaohongshu") or {}
+    for title in xhs.get("titles") or []:
+        if len(str(title)) > 20:
+            issues.append({"platform": "xhs", "message": f"标题超过20字（{len(title)}字）：{title}"})
+
+    # qualityRubric must be filled
+    rubric = (content.get("promotionStrategy") or {}).get("qualityRubric") or {}
+    for axis in ["fidelity", "engagement", "alignment"]:
+        if not (rubric.get(axis) or {}).get("checks"):
+            issues.append({"platform": "all", "message": f"qualityRubric.{axis}.checks 为空"})
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Auto-fix
+# ---------------------------------------------------------------------------
+
+def _auto_fix(
+    original: dict[str, Any],
+    issues: list[dict[str, str]],
+    original_messages: list[dict[str, str]],
+    base_body: dict[str, Any],
+    url: str,
+    headers: dict[str, str],
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Send one follow-up message to fix specific quality issues."""
+    issue_lines = "\n".join(f"- [{i['platform']}] {i['message']}" for i in issues)
+    fix_request = (
+        "以下是上面输出中发现的问题，请修正并输出完整的 JSON（与上次格式相同）：\n\n"
+        f"{issue_lines}\n\n"
+        "修正要求：\n"
+        "- 删除所有禁用词（必备/神器/颠覆等），用具体描述代替\n"
+        "- 确保 CTA 在主要平台文案中被引用\n"
+        "- 小红书标题控制在20字以内\n"
+        "- 填写 qualityRubric 三轴审核\n"
+        "直接输出 JSON，不要其他解释。"
+    )
+
+    fix_messages = [
+        *original_messages,
+        {"role": "assistant", "content": json.dumps(original, ensure_ascii=False)},
+        {"role": "user", "content": fix_request},
+    ]
+
+    fix_body = {**base_body, "messages": fix_messages}
+    try:
+        response = post_json(url, fix_body, headers=headers, timeout=config["timeout"])
+        raw = extract_chat_content(response)
+        return parse_json_content(raw)
+    except Exception:  # noqa: BLE001
+        return None  # Fix failed, keep original
 
 
 def post_json(url: str, body: dict[str, Any], *, headers: dict[str, str] | None = None, timeout: float = 120) -> dict[str, Any]:

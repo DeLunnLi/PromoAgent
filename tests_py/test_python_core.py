@@ -10,7 +10,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from source2launch.ai import generate_ai_content, parse_json_content
+from source2launch.ai import generate_ai_content, parse_json_content, validate_content
 from source2launch.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
 from source2launch.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
 from source2launch.examples import detect_category, find_examples, format_examples_for_prompt
@@ -165,6 +165,78 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(generated["model"], "test-model")
         self.assertEqual(generated["content"]["positioning"], "测试定位")
         self.assertIn("promotionStrategy.qualityRubric", server.last_request["messages"][1]["content"])
+
+    # ------------------------------------------------------------------
+    # Output validation
+    # ------------------------------------------------------------------
+
+    def test_validate_content_catches_banned_words(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        content = {
+            "promotionStrategy": {"qualityRubric": {
+                "fidelity": {"checks": ["ok"]},
+                "engagement": {"checks": ["ok"]},
+                "alignment": {"checks": ["ok"]},
+            }},
+            "promotions": {
+                "xiaohongshu": {
+                    "titles": ["短标题"],
+                    "markdown": "这款神器必备，颠覆你的工作流！",
+                }
+            }
+        }
+        issues = validate_content(content, result)
+        messages = [i["message"] for i in issues]
+        self.assertTrue(any("神器" in m or "必备" in m or "颠覆" in m for m in messages))
+
+    def test_validate_content_catches_long_xhs_title(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        content = {
+            "promotionStrategy": {"qualityRubric": {
+                "fidelity": {"checks": ["ok"]},
+                "engagement": {"checks": ["ok"]},
+                "alignment": {"checks": ["ok"]},
+            }},
+            "promotions": {
+                "xiaohongshu": {
+                    "titles": ["这个标题超过了二十个汉字的限制真的太长了吧"],  # 21 chars
+                    "markdown": "正文内容",
+                }
+            }
+        }
+        issues = validate_content(content, result)
+        xhs_issues = [i for i in issues if i["platform"] == "xhs"]
+        self.assertTrue(any("20字" in i["message"] for i in xhs_issues))
+
+    def test_validate_content_catches_missing_rubric(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        content = {
+            "promotionStrategy": {"qualityRubric": {}},
+            "promotions": {}
+        }
+        issues = validate_content(content, result)
+        rubric_issues = [i for i in issues if "qualityRubric" in i["message"]]
+        self.assertGreater(len(rubric_issues), 0)
+
+    def test_validate_content_passes_clean_output(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        content = {
+            "promotionStrategy": {"qualityRubric": {
+                "fidelity": {"checks": ["事实准确"]},
+                "engagement": {"checks": ["开头具体"]},
+                "alignment": {"checks": ["平台语气匹配"]},
+            }},
+            "promotions": {
+                "xiaohongshu": {
+                    "titles": ["用一行命令生成推广文案"],
+                    "markdown": "npx repo-pulse . 把仓库变成小红书帖子，5分钟搞定发布前的文案焦虑。",
+                }
+            }
+        }
+        issues = validate_content(content, result)
+        # Clean output should have no or minimal issues
+        critical_issues = [i for i in issues if "禁用词" in i["message"] or "标题" in i["message"]]
+        self.assertEqual(len(critical_issues), 0)
 
     def test_parse_json_content_accepts_fenced_json(self):
         parsed = parse_json_content("```json\n{\"ok\": true}\n```")
