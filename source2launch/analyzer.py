@@ -4,22 +4,12 @@ import json
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
 VERSION = "0.2.0"
-
-
-CHECK_DEFS = {
-    "readme-pitch": {"label": "README pitch", "max": 18},
-    "visual-demo": {"label": "Visual proof", "max": 12},
-    "install-command": {"label": "Install command", "max": 12},
-    "demo-usage": {"label": "Demo / usage", "max": 12},
-    "topics": {"label": "Topics / keywords", "max": 10},
-    "examples": {"label": "Examples", "max": 10},
-    "first-screen": {"label": "First screen", "max": 12},
-    "package-release": {"label": "Package / release", "max": 14},
-}
 
 
 def analyze_target(input_value: str = ".", *, cwd: str | os.PathLike[str] | None = None) -> dict[str, Any]:
@@ -37,7 +27,17 @@ def analyze_target(input_value: str = ".", *, cwd: str | os.PathLike[str] | None
     return analyze_repository_path(root)
 
 
-def analyze_url_reference(url: str) -> dict[str, Any]:
+def analyze_url_reference(
+    url: str,
+    *,
+    _github_api_base: str | None = None,
+    _github_raw_base: str | None = None,
+) -> dict[str, Any]:
+    if "github.com" in url.lower():
+        try:
+            return analyze_github_url(url, _github_api_base=_github_api_base, _github_raw_base=_github_raw_base)
+        except Exception:  # noqa: BLE001 — network/parse failure → fall through to placeholder
+            pass
     parsed_name = url_project_name(url)
     project = {
         "name": parsed_name,
@@ -67,8 +67,6 @@ def analyze_url_reference(url: str) -> dict[str, Any]:
         "target": url,
         "source": "url",
         "inputType": "url",
-        "score": 0,
-        "grade": "N/A",
         "project": project,
         "evidence": evidence,
         "repository": {
@@ -80,10 +78,6 @@ def analyze_url_reference(url: str) -> dict[str, Any]:
             "topics": [],
             "latestRelease": None,
         },
-        "checks": [],
-        "topFixes": [
-            finding("medium", "Only a remote URL was provided.", "Pass a local repository, README, PDF, or --context file so Source2Launch can ground the copy in source evidence.")
-        ],
     }
 
 
@@ -114,19 +108,11 @@ def analyze_document_path(path: str | os.PathLike[str]) -> dict[str, Any]:
         "examplePaths": [],
         "documentClips": document_clips(doc_path, raw_text),
     }
-    top_fixes = []
-    if not opening:
-        top_fixes.append(finding("medium", "Document opening is hard to summarize.", "Add an abstract, README-style overview, or notes with problem/method/evidence."))
-    if not evidence["visuals"] and input_type == "pdf":
-        top_fixes.append(finding("medium", "No visual references were extracted from the document text.", "Provide screenshots or figure notes with --context in a later AI run."))
-
     return {
         "version": VERSION,
         "target": str(doc_path),
         "source": "file",
         "inputType": input_type,
-        "score": 0,
-        "grade": "N/A",
         "project": project,
         "evidence": evidence,
         "repository": {
@@ -138,8 +124,6 @@ def analyze_document_path(path: str | os.PathLike[str]) -> dict[str, Any]:
             "topics": [],
             "latestRelease": None,
         },
-        "checks": [],
-        "topFixes": top_fixes,
     }
 
 
@@ -148,34 +132,11 @@ def analyze_repository_path(root: str | os.PathLike[str]) -> dict[str, Any]:
     facts = collect_facts(root_path)
     project = project_info(facts, root_path)
     evidence = evidence_info(facts)
-    checks = [
-        check_readme_pitch(facts),
-        check_visual_demo(facts),
-        check_install_command(facts),
-        check_demo_usage(facts),
-        check_topics(facts),
-        check_examples(facts),
-        check_first_screen(facts),
-        check_package_release(facts),
-    ]
-    score = sum(item["score"] for item in checks)
-    top_fixes = sorted(
-        (
-            {**finding, "check": check["id"], "impact": check["max"] - check["score"]}
-            for check in checks
-            for finding in check["findings"]
-        ),
-        key=lambda item: ({"high": 0, "medium": 1, "low": 2}.get(item["severity"], 3), -item["impact"]),
-    )[:6]
-    for item in top_fixes:
-        item.pop("impact", None)
 
     return {
         "version": VERSION,
         "target": str(root_path),
         "source": "local",
-        "score": score,
-        "grade": grade(score),
         "project": project,
         "evidence": evidence,
         "repository": {
@@ -187,8 +148,6 @@ def analyze_repository_path(root: str | os.PathLike[str]) -> dict[str, Any]:
             "topics": facts["topics"],
             "latestRelease": latest_release(facts["tags"]),
         },
-        "checks": checks,
-        "topFixes": top_fixes,
     }
 
 
@@ -286,162 +245,6 @@ def add_risk(risks: list[dict[str, str]], condition: bool, risk_id: str, message
     if condition:
         risks.append({"id": risk_id, "message": message})
 
-
-def create_check(check_id: str) -> dict[str, Any]:
-    definition = CHECK_DEFS[check_id]
-    return {
-        "id": check_id,
-        "label": definition["label"],
-        "score": 0,
-        "max": definition["max"],
-        "summary": "",
-        "findings": [],
-    }
-
-
-def finding(severity: str, message: str, fix: str) -> dict[str, str]:
-    return {"severity": severity, "message": message, "fix": fix}
-
-
-def check_readme_pitch(facts: dict[str, Any]) -> dict[str, Any]:
-    check = create_check("readme-pitch")
-    readme = facts["readme_text"]
-    if not readme:
-        check["summary"] = "No root README found"
-        check["findings"].append(finding("high", "Add a root README with a plain-language pitch.", "Start with a H1 and one sentence that says who it is for, what it does, and why it is different."))
-        return check
-    title = first_heading(readme)
-    opening = opening_paragraph(readme)
-    words = word_count(opening)
-    score = 0
-    if title:
-        score += 3
-    else:
-        check["findings"].append(finding("medium", "The README does not start with a clear H1 title.", "Add a product-style H1 before badges or setup details."))
-    if opening:
-        score += 4
-    else:
-        check["findings"].append(finding("high", "The README opening does not contain a usable one-sentence pitch.", "Put a concise value proposition directly below the title."))
-    if 8 <= words <= 35:
-        score += 4
-    if re.search(r"\b(for|to|helps?|lets?|without|with|build|scan|generate|deploy|monitor|test|debug|analy[sz]e|convert|ship|automate)\b", opening, re.I):
-        score += 5
-    if not check["findings"] and score < check["max"]:
-        score += 2
-    check["score"] = min(check["max"], score)
-    check["summary"] = "README communicates a launch pitch" if check["score"] >= 14 else "README pitch needs sharper source-grounded positioning"
-    return check
-
-
-def check_visual_demo(facts: dict[str, Any]) -> dict[str, Any]:
-    check = create_check("visual-demo")
-    refs = visual_references(facts["readme_text"])
-    if refs:
-        check["score"] = 12 if len(refs) >= 2 else 8
-        check["summary"] = "README has visual proof"
-    else:
-        check["summary"] = "No visual proof found"
-        check["findings"].append(finding("medium", "Add a screenshot, GIF, demo video, or terminal output image.", "Show the real output a visitor should expect."))
-    return check
-
-
-def check_install_command(facts: dict[str, Any]) -> dict[str, Any]:
-    check = create_check("install-command")
-    commands = install_commands(facts["readme_text"])
-    if not commands:
-        check["summary"] = "No copy-paste install command found"
-        check["findings"].append(finding("high", "Add one copy-paste install or run command.", "Put the shortest command in the README first screen."))
-        return check
-    shortest = min(commands, key=len)
-    check["score"] = 12 if len(shortest) <= 60 else 10 if len(shortest) <= 90 else 7 if len(shortest) <= 130 else 4
-    check["summary"] = "Install command is visible" if check["score"] >= 10 else "Install command is present but long"
-    return check
-
-
-def check_demo_usage(facts: dict[str, Any]) -> dict[str, Any]:
-    check = create_check("demo-usage")
-    readme = facts["readme_text"]
-    score = 0
-    if re.search(r"^##+\s+(usage|quickstart|example|demo|get started)", readme, re.I | re.M):
-        score += 4
-    if fenced_blocks(readme):
-        score += 4
-    if re.search(r"\b(demo|example|quickstart|usage)\b", readme, re.I):
-        score += 2
-    if any(re.search(r"^(examples?|demos?|samples?)/", normalize_path(file), re.I) for file in facts["files"]):
-        score += 2
-    check["score"] = min(check["max"], score)
-    check["summary"] = "Usage path is visible" if score >= 9 else "Usage path needs more proof"
-    if score < 8:
-        check["findings"].append(finding("medium", "Add a short usage example.", "Show the exact command and expected output."))
-    return check
-
-
-def check_topics(facts: dict[str, Any]) -> dict[str, Any]:
-    check = create_check("topics")
-    count = len(facts["topics"])
-    check["score"] = 10 if count >= 5 else 8 if count >= 3 else 5 if count >= 1 else 0
-    check["summary"] = f"{count} topic or keyword signals"
-    if count < 3:
-        check["findings"].append(finding("low", "Add more searchable topics or package keywords.", "Use terms a target reader would search for."))
-    return check
-
-
-def check_examples(facts: dict[str, Any]) -> dict[str, Any]:
-    check = create_check("examples")
-    example_files = [file for file in facts["files"] if re.search(r"^(examples?|demos?|samples?)/", normalize_path(file), re.I)]
-    blocks = len(fenced_blocks(facts["readme_text"]))
-    score = 0
-    if example_files:
-        score += 5
-    if len(example_files) >= 2:
-        score += 2
-    score += 3 if blocks >= 2 else 1 if blocks == 1 else 0
-    check["score"] = min(check["max"], score)
-    check["summary"] = "Examples are easy to inspect" if check["score"] >= 8 else "Examples need more concrete proof"
-    if check["score"] < 8:
-        check["findings"].append(finding("medium", "Add examples or a demo path.", "Include a minimal example and expected output."))
-    return check
-
-
-def check_first_screen(facts: dict[str, Any]) -> dict[str, Any]:
-    check = create_check("first-screen")
-    first = facts["readme_text"][:1800]
-    score = 0
-    if first_heading(first):
-        score += 2
-    if word_count(opening_paragraph(first)) >= 8:
-        score += 3
-    if visual_references(first):
-        score += 3
-    if install_commands(first):
-        score += 3
-    if not re.search(r"(\[!\[|shields\.io|badgen\.net)", first, re.I):
-        score += 1
-    check["score"] = min(check["max"], score)
-    check["summary"] = "First screen has core launch signals" if check["score"] >= 9 else "First screen is missing launch signals"
-    if check["score"] < 9:
-        check["findings"].append(finding("medium", "Improve README first screen.", "Put pitch, proof, and try command before deep details."))
-    return check
-
-
-def check_package_release(facts: dict[str, Any]) -> dict[str, Any]:
-    check = create_check("package-release")
-    package = facts["package_json"] if isinstance(facts["package_json"], dict) else {}
-    score = 0
-    if has_root_file(facts["files"], re.compile(r"^(license|licence)(\.(md|txt))?$", re.I)) or package.get("license"):
-        score += 3
-    if package.get("name") or facts["pyproject_path"] or facts["cargo_path"] or facts["go_mod_path"]:
-        score += 5
-    if package.get("bin") or package.get("main") or package.get("exports"):
-        score += 3
-    if facts["tags"]:
-        score += 3
-    check["score"] = min(check["max"], score)
-    check["summary"] = "Package identity is visible" if check["score"] >= 10 else "Package identity or release metadata is incomplete"
-    if check["score"] < 10:
-        check["findings"].append(finding("low", "Complete package identity and release metadata.", "Add license, entrypoint, repository link, and release notes where applicable."))
-    return check
 
 
 def walk(root: Path) -> list[str]:
@@ -730,13 +533,149 @@ def unique(values: list[Any]) -> list[str]:
     return result
 
 
-def grade(score: int) -> str:
-    if score >= 85:
-        return "A"
-    if score >= 70:
-        return "B"
-    if score >= 55:
-        return "C"
-    if score >= 40:
-        return "D"
-    return "F"
+# ---------------------------------------------------------------------------
+# Network helpers (zero external dependencies — stdlib urllib only)
+# ---------------------------------------------------------------------------
+
+_FETCH_TIMEOUT = 10  # seconds
+
+
+def _github_headers(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Return headers for GitHub API requests, including auth token if available."""
+    env = env or os.environ
+    token = env.get("GITHUB_TOKEN") or env.get("SOURCE2LAUNCH_GITHUB_TOKEN")
+    headers: dict[str, str] = {"Accept": "application/vnd.github+json", "User-Agent": "source2launch/0.2"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def fetch_text(url: str, headers: dict[str, str] | None = None, timeout: int = _FETCH_TIMEOUT) -> str:
+    """Fetch a URL and return the response body as text. Raises on HTTP error."""
+    req = urllib.request.Request(url, headers={"User-Agent": "source2launch/0.2", **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        charset = "utf-8"
+        content_type = resp.headers.get("Content-Type", "")
+        if "charset=" in content_type:
+            charset = content_type.split("charset=")[-1].split(";")[0].strip()
+        return resp.read().decode(charset, errors="replace")
+
+
+def fetch_json(url: str, headers: dict[str, str] | None = None, timeout: int = _FETCH_TIMEOUT) -> dict[str, Any]:
+    """Fetch a URL and parse the response body as JSON."""
+    return json.loads(fetch_text(url, headers=headers, timeout=timeout))
+
+
+def parse_github_owner_repo(url: str) -> tuple[str, str]:
+    """Extract (owner, repo) from a GitHub URL. Raises ValueError if not parseable."""
+    cleaned = re.sub(r"[?#].*$", "", url.strip()).rstrip("/")
+    # Remove .git suffix
+    cleaned = re.sub(r"\.git$", "", cleaned)
+    parts = [p for p in cleaned.split("/") if p]
+    try:
+        gh_idx = next(i for i, p in enumerate(parts) if "github.com" in p.lower())
+        owner = parts[gh_idx + 1]
+        repo = parts[gh_idx + 2]
+    except (StopIteration, IndexError) as exc:
+        raise ValueError(f"Cannot parse GitHub owner/repo from URL: {url}") from exc
+    return owner, repo
+
+
+def analyze_github_url(
+    url: str,
+    env: dict[str, str] | None = None,
+    *,
+    _github_api_base: str | None = None,
+    _github_raw_base: str | None = None,
+) -> dict[str, Any]:
+    """Fetch a GitHub repository via the public API and return a full result dict."""
+    owner, repo = parse_github_owner_repo(url)
+    headers = _github_headers(env)
+    api_base = (_github_api_base or "https://api.github.com").rstrip("/")
+    raw_base = (_github_raw_base or "https://raw.githubusercontent.com").rstrip("/")
+
+    # 1. Repository metadata
+    api_data = fetch_json(f"{api_base}/repos/{owner}/{repo}", headers=headers)
+    description = str(api_data.get("description") or "")
+    topics: list[str] = api_data.get("topics") or []
+    stars: int | None = api_data.get("stargazers_count")
+    default_branch: str = api_data.get("default_branch") or "main"
+    license_name: str | None = (api_data.get("license") or {}).get("spdx_id") or (api_data.get("license") or {}).get("name")
+    homepage: str | None = api_data.get("homepage") or None
+    repo_url: str = f"https://github.com/{owner}/{repo}"
+
+    # 2. README text — try default branch, then main/master
+    readme_text = ""
+    for branch in unique([default_branch, "main", "master"]):
+        try:
+            raw_url = f"{raw_base}/{owner}/{repo}/{branch}/README.md"
+            readme_text = fetch_text(raw_url, timeout=_FETCH_TIMEOUT)
+            break
+        except (urllib.error.HTTPError, urllib.error.URLError):
+            continue
+
+    # 3. Build result using existing heuristic helpers
+    # Prefer the authoritative API name over the README heading (strip_markdown removes hyphens)
+    name = api_data.get("name") or first_heading(readme_text) or repo
+    opening = opening_paragraph(readme_text) or compact_snippet(description, 300)
+    install_cmds = install_commands(readme_text)
+
+    project = {
+        "name": name,
+        "packageName": None,
+        "description": trim_for_summary(opening or description or f"{name} is an open source project."),
+        "repositoryUrl": repo_url,
+        "homepage": homepage,
+        "installCommand": min(install_cmds, key=len) if install_cmds else None,
+        "topics": topics,
+        "stars": stars,
+    }
+
+    evidence: dict[str, Any] = {
+        "readmeOpening": opening,
+        "readmeFirstScreen": compact_snippet(readme_text[:1800], 1800) if readme_text else "",
+        "headings": readme_headings(readme_text)[:16],
+        "installCommands": install_cmds[:5],
+        "visuals": visual_references(readme_text)[:5],
+        "visualUrls": extract_image_urls(readme_text)[:3],
+        "launchRisks": _github_launch_risks(readme_text, topics, license_name),
+        "packageScripts": {},
+        "examplePaths": [],
+        "documentClips": [],
+    }
+
+    return {
+        "version": VERSION,
+        "target": url,
+        "source": "github",
+        "inputType": "github",
+        "project": project,
+        "evidence": evidence,
+        "repository": {
+            "root": None,
+            "filesScanned": 0,
+            "readme": "README.md" if readme_text else None,
+            "manifest": None,
+            "stars": stars,
+            "topics": topics,
+            "latestRelease": None,
+        },
+    }
+
+
+def _github_launch_risks(readme_text: str, topics: list[str], license_name: str | None) -> list[dict[str, str]]:
+    risks: list[dict[str, str]] = []
+    if not readme_text:
+        add_risk(risks, True, "missing-readme", "No README content could be fetched from GitHub.")
+    else:
+        plain = strip_code_blocks(readme_text)
+        add_risk(risks, bool(re.search(r"\b(TODO|FIXME|TBD|WIP)\b", plain, re.I)), "placeholder-notes", "Repo text still contains TODO/FIXME/TBD/WIP markers.")
+        add_risk(risks, not install_commands(readme_text), "missing-install", "No copy-paste install command was found in the README.")
+        add_risk(risks, not visual_references(readme_text), "missing-visual", "No README visual, GIF, screenshot, or video was found.")
+    add_risk(risks, len(topics) < 3, "few-topics", "Fewer than 3 GitHub topic tags were found.")
+    add_risk(risks, not license_name, "missing-license", "No license was detected in the repository metadata.")
+    return risks
+
+
+
+

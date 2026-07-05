@@ -3,6 +3,149 @@ from __future__ import annotations
 import json
 from typing import Any
 
+# ---------------------------------------------------------------------------
+# Prompt presets — each entry is the actual instruction injected into the prompt.
+# ---------------------------------------------------------------------------
+PROMPT_PRESETS: dict[str, str] = {
+    "grounded": (
+        "Every claim must be traceable to a specific source: README text, paper abstract, "
+        "figure caption, result table, code comment, CLI command, or screenshot. "
+        "If a claim cannot be verified from the provided evidence, write a caveat instead of inventing support."
+    ),
+    "author": (
+        "Write in the voice of the project maintainer or paper author — someone sharing a useful artifact, "
+        "not a marketing team. Prefer concrete descriptions ('reads a local repo, outputs Markdown') "
+        "over superlatives ('powerful', 'seamless', 'revolutionary'). "
+        "First-person is fine where the evidence supports it."
+    ),
+    "realworld": (
+        "Before finalising any platform copy, internally compare it against real technical promotion patterns: "
+        "does the first line name the project, problem, command, or result immediately? "
+        "Is there exactly one concrete artifact (link, command, figure, table) near the top? "
+        "Is there one clear reason for the target reader to act? "
+        "If not, revise before outputting."
+    ),
+    "autopr": (
+        "Follow the AutoPR promotion workflow:\n"
+        "1. Extract source material — title, task definition, method, evidence clips, code or demo path, visual assets, caveats, audience signals.\n"
+        "2. Synthesise a single core angle grounded in that evidence and write it into promotionStrategy.coreAngle.\n"
+        "3. Adapt the angle to each platform's format, length, tone, and visual conventions.\n"
+        "4. Review fidelity (source faithfulness), engagement (concrete hook, clear CTA), "
+        "and alignment (platform-native tone and format) before outputting."
+    ),
+    "scholardag": (
+        "Build a content graph (Scholar-DAG) before writing:\n"
+        "- Problem node: what gap or pain does this address?\n"
+        "- Method node: what is the core approach or technique?\n"
+        "- Evidence nodes: which figures, tables, benchmarks, or demo outputs prove the claim?\n"
+        "- Visual proof nodes: which screenshots, paper figures, or generated cards should appear?\n"
+        "- Caveat nodes: what are honest limitations or missing evidence?\n"
+        "- Audience nodes: who benefits and on which platform?\n"
+        "- Action node: what should the reader do next?\n"
+        "All platform variants must draw from this shared graph; do not let individual platform copy drift into different claims."
+    ),
+    "human": (
+        "Each post should read as though one person is sharing one concrete observation. "
+        "Limit each post to a single angle. "
+        "Avoid opening with a feature inventory or platform list. "
+        "Use casual but precise language; skip empty filler phrases like 'In today's fast-paced world'."
+    ),
+    "tweet": (
+        "For Twitter / X output:\n"
+        "- One angle per tweet or thread — do not pack every feature into one post.\n"
+        "- Place a concrete artifact (command, URL, figure reference, or key result) "
+        "within the first 20 English or 40 Chinese characters.\n"
+        "- Target 140–220 Chinese or 200–280 English characters per post.\n"
+        "- At most two hashtags; prefer the project name and one topic tag.\n"
+        "- If writing a thread, use hook → context → mechanism → evidence → caveat → action structure."
+    ),
+    "paper": (
+        "For paper-based sources:\n"
+        "- Surface the problem the paper addresses, the method or model used, "
+        "key evidence (benchmark tables, figures, ablations), why it matters to the reader, "
+        "and honest limitations.\n"
+        "- Do not reduce the paper to a rewritten abstract — show at least one figure, table, or result number.\n"
+        "- Distinguish claims the paper proves from claims it suggests or leaves to future work."
+    ),
+    "launch": (
+        "For open-source code launches:\n"
+        "- Show what the tool reads as input and what it produces as output.\n"
+        "- Include the shortest working install or run command from the README.\n"
+        "- Name the target user ('useful for researchers who…', 'designed for maintainers who…').\n"
+        "- Include one concrete proof: screenshot, README excerpt, terminal output, or live demo link.\n"
+        "- Mention the current maturity level honestly (alpha, beta, production-ready)."
+    ),
+    "launchkit": (
+        "Generate structured launch material:\n"
+        "- Product Hunt: tagline (≤60 chars), description, maker first comment (personal story + limitation + feedback ask), gallery plan (what each image shows).\n"
+        "- Show HN: plain title ('Show HN: Name — one-sentence description'), what it does, how to try it right now, key implementation choice, two honest limitations. No vote request.\n"
+        "- LinkedIn: build-note format — problem encountered, what was built, one concrete artifact, who should try it, modest discussion prompt."
+    ),
+    "technical": (
+        "Keep technical boundaries explicit:\n"
+        "- Name the input format, output format, CLI command or API route, and configuration requirements.\n"
+        "- Show the workflow as a sequence of concrete steps rather than abstract benefits.\n"
+        "- Do not hide implementation choices behind marketing language."
+    ),
+    "zhihu": (
+        "Structure Zhihu output as a credible technical answer:\n"
+        "- Conclusion first (one sentence direct answer), then background, method or workflow, "
+        "evidence with source citations, limitations, and reader fit.\n"
+        "- Tone: analytical and restrained — reads like a useful answer to a question, not a sales page.\n"
+        "- Cite source material explicitly: paper abstract crop, method figure, result table, README excerpt, command, or demo screenshot."
+    ),
+    "xhs": (
+        "Structure Xiaohongshu output as a carousel note:\n"
+        "- Generate 2–3 title options (≤20 Chinese characters each) and cover text before writing the body.\n"
+        "- Body: one takeaway per card, one visual suggestion per card — treat it as a slide deck.\n"
+        "- Tags: 3–6 concise relevant tags; do not use generic filler tags.\n"
+        "- Do not invent user counts, star numbers, award wins, or benchmark results."
+    ),
+    "wechat": (
+        "Structure WeChat output with full article packaging:\n"
+        "- Title, one-line summary, cover text, section outline, and body.\n"
+        "- Preferred sections: introduction, problem, method or workflow, evidence or results, limitations, who should read.\n"
+        "- Place paper screenshots or repository evidence near the claim they support.\n"
+        "- Also generate a compact Moments post (≤140 Chinese characters): one takeaway + one reason to open the source."
+    ),
+    "visual": (
+        "For every major claim, identify the corresponding source clip:\n"
+        "- Paper figure (name the figure number or caption), result table, README screenshot, terminal output, or architecture diagram.\n"
+        "- Output a visualNarrative plan in the JSON before writing platform copy.\n"
+        "- Do not suggest AI-generated images for claims that should use real evidence screenshots.\n"
+        "- Carousel order suggestion: hook/cover, source proof, simplified takeaway, method or workflow, caveat, call to read or try."
+    ),
+    "paper2web": (
+        "Check presentation completeness for paper sources:\n"
+        "- Visual anchor: is there at least one figure, table, or screenshot that a reader can scan before reading the text?\n"
+        "- Reader path: does the output tell the reader who should read, why, and what to do next?\n"
+        "- Source proof: is every major claim tied to a specific paper section, figure, or appendix?\n"
+        "Revise if any of these are missing."
+    ),
+    "thread": (
+        "Structure threaded output (Twitter thread, Zhihu series, or carousel) as:\n"
+        "1. Hook — surprising result, concrete problem, or direct question.\n"
+        "2. Context — why this matters and who it affects.\n"
+        "3. Mechanism — how it works (method, algorithm, or workflow).\n"
+        "4. Evidence — one or two concrete artifacts (command, figure, benchmark, screenshot).\n"
+        "5. Caveat — one honest limitation or open question.\n"
+        "6. Action — what the reader should do next (try, read, follow, or contribute)."
+    ),
+}
+
+def expand_presets(names: list[str]) -> str:
+    """Return the combined instruction text for the given preset names.
+
+    Unknown names are silently skipped so callers don't need to guard.
+    """
+    parts: list[str] = []
+    for name in names:
+        instruction = PROMPT_PRESETS.get(name.strip().lower())
+        if instruction:
+            parts.append(f"### Preset: {name}\n{instruction}")
+    return "\n\n".join(parts)
+
+
 PROMO_JSON_SCHEMA = "\n".join([
     "{",
     '  "positioning": "一句话定位（结果导向，不是功能列表）",',
@@ -38,7 +181,7 @@ PROMO_JSON_SCHEMA = "\n".join([
 def build_promo_system_prompt() -> str:
     return "\n".join([
         "你是项目/论文发布内容策划 + 多平台内容主编，专门把开源仓库、论文 PDF、README 和来源证据转成可人工审核的推广 Markdown 文件。",
-        "你会收到 README 原文、安装命令、Demo 证据、论文/PDF 摘要、规则扫描结果、launchRisks、topFixes 等。请独立阅读 evidence，不要机械复述体检分数或指标数字。",
+        "你会收到 README 原文、安装命令、Demo 证据、论文/PDF 摘要、launchRisks 等。请独立阅读 evidence，基于真实证据写作。",
         "",
         "## 可信度铁律",
         "- 禁止编造 star 增长数量、用户数量、媒体报道、他人评价、benchmark 或论文结果。",
@@ -96,8 +239,6 @@ def build_evidence_brief(payload: dict[str, Any]) -> str:
         lines.append(f"- 仓库：{project['repositoryUrl']}")
     if project.get("topics"):
         lines.append(f"- Topics：{', '.join(project['topics'])}")
-    if payload.get("heuristicScore"):
-        lines.append("- 本地资料检查：已完成，仅作 CI / 资料完整度参考；推广正文不要展示分数或等级")
     if evidence.get("readmeOpening"):
         lines.append(f"- README 开头片段：{str(evidence['readmeOpening']).strip()[:200]}…")
     risks = evidence.get("launchRisks") or []
@@ -105,17 +246,4 @@ def build_evidence_brief(payload: dict[str, Any]) -> str:
         lines.append("- launchRisks（可诚实提及或用于 Show HN limitations）：")
         for risk in risks[:3]:
             lines.append(f"  - {risk.get('message') if isinstance(risk, dict) else risk}")
-    top_fixes = payload.get("topFixes") or []
-    if top_fixes:
-        lines.append("- 优先改进项（可用于「我还在完善…」）：")
-        for fix in top_fixes[:3]:
-            lines.append(f"  - {fix.get('fix') or fix.get('message') if isinstance(fix, dict) else fix}")
-    strong_checks = [
-        item for item in payload.get("checks", [])
-        if item.get("max") and item.get("score", 0) / item["max"] >= 0.75
-    ][:3]
-    if strong_checks:
-        lines.append("- 可引用的真实亮点（转成场景句，不要照搬 summary）：")
-        for check in strong_checks:
-            lines.append(f"  - {check.get('label')}：{check.get('summary')}")
     return "\n".join(lines)

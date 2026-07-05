@@ -57,9 +57,6 @@ def build_promo_payload(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "project": result.get("project", {}),
         "evidence": result.get("evidence", {}),
-        "heuristicScore": {"score": result.get("score"), "grade": result.get("grade")},
-        "checks": result.get("checks", []),
-        "topFixes": result.get("topFixes", []),
         "target": result.get("target"),
         "source": result.get("source"),
         "inputType": result.get("inputType"),
@@ -86,19 +83,23 @@ def generate_ai_content(
     if not config["apiKey"]:
         raise RuntimeError("Missing AI API key. Set SOURCE2LAUNCH_API_KEY or SOURCE2LAUNCH_MODELSCOPE_API_KEY.")
     messages = build_promo_messages(result, platform=platform, brief_section=brief_section)
-    request_body = {
+    url = f"{config['baseUrl']}/chat/completions"
+    headers = {"Authorization": f"Bearer {config['apiKey']}"}
+    base_body: dict[str, Any] = {
         "model": config["model"],
         "messages": messages,
         "temperature": config["temperature"],
         "max_tokens": config["maxTokens"],
-        "response_format": {"type": "json_object"},
     }
-    response = post_json(
-        f"{config['baseUrl']}/chat/completions",
-        request_body,
-        headers={"Authorization": f"Bearer {config['apiKey']}"},
-        timeout=config["timeout"],
-    )
+    # Try with response_format first; fall back if the provider does not support it.
+    try:
+        response = post_json(url, {**base_body, "response_format": {"type": "json_object"}}, headers=headers, timeout=config["timeout"])
+    except RuntimeError as exc:
+        err = str(exc).lower()
+        if "response_format" in err or "json_object" in err or "unsupported" in err or "invalid" in err:
+            response = post_json(url, base_body, headers=headers, timeout=config["timeout"])
+        else:
+            raise
     content = extract_chat_content(response)
     parsed = parse_json_content(content)
     return {

@@ -23,23 +23,13 @@ Source2Launch 是一个给开源作者、论文作者和技术内容维护者使
 
 ## 安装
 
-发布到 npm 前，推荐用 GitHub 包临时运行，并显式指定 `source2launch` 这个 bin：
-
-```sh
-npm exec --package github:DeLunnLi/Source2Launch -- source2launch promote . --platform xhs
-```
-
-本地开发：
-
 ```sh
 git clone https://github.com/DeLunnLi/Source2Launch.git
 cd Source2Launch
-npm install
-npm link
-source2launch promote . --platform all
+pip install -e .
 ```
 
-`source2launch` 是主命令。
+安装后即可直接使用 `source2launch` 命令。
 
 ## 生成文案
 
@@ -172,49 +162,19 @@ curl http://127.0.0.1:4317/health
 - 配图是否展示真实来源证据，而不是虚构结果。
 - 发布账号、链接、图片和标签是否正确。
 
-## CI / 本地检查
-
-保留少量 CI / 本地检查入口：
+## 本地检查
 
 ```sh
-source2launch . --fail-under 70
 source2launch . --json > report.json
 source2launch . --intro -o PROJECT_INTRO.md
 ```
 
-这些命令主要用于本地资料检查、项目介绍文档生成和兼容已有工作流。历史命令别名、独立检查入口和 HTML 报告入口已移除。
-
-## Python 迁移
-
-项目正在逐步从 JavaScript 迁移到 Python。当前 npm 发布包的主命令 `source2launch` 和 `source2launch-api` 已是 Python shebang 脚本，发布清单不再包含 `src/`。仓库里的 `src/` 仅作为历史迁移参考和旧测试基线保留。Python 版已覆盖本地仓库/Markdown/TXT/PDF/URL 输入分析、Markdown 生成、`optimize` 本地资料包、`publish` 审核计划、promotion prompt payload、OpenAI-compatible / ModelScope 文本模型调用、ModelScope / Gradio 图片生成入口，以及图片 API 服务。
-
-```sh
-python3 -m source2launch analyze . --json
-python3 -m source2launch analyze paper.md --json
-python3 -m source2launch markdown . --markdown-type launch --output LAUNCH.md
-python3 -m source2launch promote . --platform xhs --json
-python3 -m source2launch promote . --platform all --ai --json --output promotion.json
-python3 -m source2launch image . --platform xhs --dry-run
-python3 -m source2launch image . --platform xhs --provider modelscope --output cover.jpg
-python3 -m source2launch optimize . --output launch-assets/
-python3 -m source2launch optimize . --ai --output launch-assets/
-python3 -m source2launch publish promotion.json --platform xhs --publish-mode review
-```
-
-Python 测试：
-
-```sh
-npm run test:python
-```
 
 ## 开发
 
 ```sh
-npm install
-npm test
-npm run test:python
-npm run test:js   # optional legacy baseline
-npm pack --dry-run
+pip install -e .
+python3 -m unittest discover -s tests_py -v
 ```
 
 ## License

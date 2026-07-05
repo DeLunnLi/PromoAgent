@@ -1,6 +1,9 @@
 node_modules/
 coverage/
 __pycache__/
+*.egg-info/
+dist/
+build/
 *.py[cod]
 .DS_Store
 *.log
