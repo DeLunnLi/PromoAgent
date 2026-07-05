@@ -100,7 +100,7 @@
     "launchSequence": []
   },
   "model": "test-model",
-  "baseUrl": "http://127.0.0.1:55041/v1",
+  "baseUrl": "http://127.0.0.1:58104/v1",
   "result": {
     "version": "0.2.0",
     "target": "/Users/delunli/Source2Launch/tests_py/fixtures/healthy-repo",

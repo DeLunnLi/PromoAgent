@@ -10,40 +10,105 @@ from typing import Any
 
 from .promo_prompts import build_promo_system_prompt, build_promo_user_prompt
 
-DEFAULT_BASE_URL = "https://api.openai.com/v1"
-MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1"
-DEFAULT_MODEL = "gpt-4o-mini"
-DEFAULT_MODELSCOPE_MODEL = "Qwen/Qwen3.5-397B-A17B"
+# ---------------------------------------------------------------------------
+# Provider defaults
+# ---------------------------------------------------------------------------
 
+_PROVIDER_DEFAULTS = {
+    "openai":     {"base_url": "https://api.openai.com/v1",                          "model": "gpt-4o-mini"},
+    "anthropic":  {"base_url": "https://api.anthropic.com",                          "model": "claude-haiku-4-5"},
+    "gemini":     {"base_url": "https://generativelanguage.googleapis.com",           "model": "gemini-2.0-flash"},
+    "ollama":     {"base_url": "http://localhost:11434",                              "model": "llama3.2"},
+    "modelscope": {"base_url": "https://api-inference.modelscope.cn/v1",             "model": "Qwen/Qwen3.5-397B-A17B"},
+}
+
+# ---------------------------------------------------------------------------
+# Provider detection
+# ---------------------------------------------------------------------------
+
+def _detect_provider(options: dict[str, Any], env: dict[str, str]) -> str:
+    """Detect the LLM provider from options and environment variables."""
+    # Explicit override wins
+    explicit = options.get("provider") or env.get("SOURCE2LAUNCH_PROVIDER", "")
+    if explicit:
+        return explicit.lower().strip()
+
+    # Key-based detection
+    if options.get("api_key", "").startswith("sk-ant-") or env.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    if env.get("GOOGLE_API_KEY") or env.get("GEMINI_API_KEY"):
+        return "gemini"
+    if env.get("OLLAMA_BASE_URL") or env.get("OLLAMA_HOST"):
+        return "ollama"
+    if env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY") or env.get("MODELSCOPE_API_KEY"):
+        return "modelscope"
+
+    # Model-name hints
+    model = options.get("model") or env.get("SOURCE2LAUNCH_MODEL") or ""
+    if re.match(r"^claude", model, re.I):
+        return "anthropic"
+    if re.match(r"^gemini", model, re.I):
+        return "gemini"
+    if re.match(r"^(llama|mistral|qwen|phi|deepseek).*:?", model, re.I) and not env.get("SOURCE2LAUNCH_API_KEY"):
+        return "ollama"
+
+    # Base URL hints
+    base_url = options.get("base_url") or env.get("SOURCE2LAUNCH_BASE_URL") or ""
+    if "anthropic" in base_url:
+        return "anthropic"
+    if "googleapis" in base_url or "generativelanguage" in base_url:
+        return "gemini"
+    if "localhost:11434" in base_url or "ollama" in base_url:
+        return "ollama"
+    if "modelscope" in base_url:
+        return "modelscope"
+
+    return "openai"  # default
+
+
+# ---------------------------------------------------------------------------
+# Unified config builder
+# ---------------------------------------------------------------------------
 
 def ai_config(options: dict[str, Any] | None = None, env: dict[str, str] | None = None) -> dict[str, Any]:
+    """Build a unified AI configuration dict, auto-detecting the provider."""
     options = options or {}
     env = env or os.environ
-    api_key = (
-        options.get("api_key")
-        or env.get("SOURCE2LAUNCH_API_KEY")
-        or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY")
-        or env.get("OPENAI_API_KEY")
-        or env.get("MODELSCOPE_API_KEY")
-    )
-    modelscope_key = bool(env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY") or env.get("MODELSCOPE_API_KEY"))
+
+    provider = _detect_provider(options, env)
+    defaults = _PROVIDER_DEFAULTS.get(provider, _PROVIDER_DEFAULTS["openai"])
+
+    # API key — each provider uses different env var names
+    if provider == "anthropic":
+        api_key = options.get("api_key") or env.get("ANTHROPIC_API_KEY") or env.get("SOURCE2LAUNCH_API_KEY")
+    elif provider == "gemini":
+        api_key = options.get("api_key") or env.get("GOOGLE_API_KEY") or env.get("GEMINI_API_KEY") or env.get("SOURCE2LAUNCH_API_KEY")
+    elif provider == "ollama":
+        api_key = options.get("api_key") or env.get("OLLAMA_API_KEY") or ""  # Ollama usually needs no key
+    elif provider == "modelscope":
+        api_key = options.get("api_key") or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY") or env.get("MODELSCOPE_API_KEY") or env.get("SOURCE2LAUNCH_API_KEY")
+    else:  # openai and compatible
+        api_key = options.get("api_key") or env.get("SOURCE2LAUNCH_API_KEY") or env.get("OPENAI_API_KEY") or env.get("MODELSCOPE_API_KEY")
+
     base_url = (
         options.get("base_url")
         or env.get("SOURCE2LAUNCH_BASE_URL")
-        or env.get("OPENAI_BASE_URL")
-        or (MODELSCOPE_BASE_URL if modelscope_key and not env.get("SOURCE2LAUNCH_API_KEY") and not env.get("OPENAI_API_KEY") else DEFAULT_BASE_URL)
-    )
+        or (env.get("OLLAMA_BASE_URL") or env.get("OLLAMA_HOST") if provider == "ollama" else None)
+        or defaults["base_url"]
+    ).rstrip("/")
+
     model = (
         options.get("model")
         or env.get("SOURCE2LAUNCH_MODEL")
-        or env.get("OPENAI_MODEL")
-        or (DEFAULT_MODELSCOPE_MODEL if base_url.rstrip("/") == MODELSCOPE_BASE_URL else DEFAULT_MODEL)
+        or defaults["model"]
     )
+
     return {
+        "provider": provider,
         "apiKey": api_key,
-        "baseUrl": str(base_url).rstrip("/"),
+        "baseUrl": base_url,
         "model": model,
-        "maxTokens": int(options.get("max_tokens") or env.get("SOURCE2LAUNCH_MAX_TOKENS") or (4096 if "modelscope" in str(base_url).lower() else 1800)),
+        "maxTokens": int(options.get("max_tokens") or env.get("SOURCE2LAUNCH_MAX_TOKENS") or 4096),
         "temperature": float(options.get("temperature") if options.get("temperature") is not None else env.get("SOURCE2LAUNCH_TEMPERATURE") or 0.7),
         "timeout": float(options.get("timeout") or env.get("SOURCE2LAUNCH_TIMEOUT_MS") or 120_000) / 1000,
     }
@@ -51,7 +116,17 @@ def ai_config(options: dict[str, Any] | None = None, env: dict[str, str] | None 
 
 def has_ai_key(env: dict[str, str] | None = None) -> bool:
     env = env or os.environ
-    return bool(env.get("SOURCE2LAUNCH_API_KEY") or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY") or env.get("OPENAI_API_KEY") or env.get("MODELSCOPE_API_KEY"))
+    return bool(
+        env.get("SOURCE2LAUNCH_API_KEY")
+        or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY")
+        or env.get("OPENAI_API_KEY")
+        or env.get("MODELSCOPE_API_KEY")
+        or env.get("ANTHROPIC_API_KEY")
+        or env.get("GOOGLE_API_KEY")
+        or env.get("GEMINI_API_KEY")
+        or env.get("OLLAMA_BASE_URL")
+        or env.get("OLLAMA_HOST")
+    )
 
 
 def build_promo_payload(result: dict[str, Any]) -> dict[str, Any]:
@@ -95,37 +170,35 @@ def generate_ai_content(
 ) -> dict[str, Any]:
     """Stage 2: generate promotional content with streaming, validation, auto-fix, and example comparison."""
     config = ai_config(options, env)
-    if not config["apiKey"]:
-        raise RuntimeError("Missing AI API key. Set SOURCE2LAUNCH_API_KEY or SOURCE2LAUNCH_MODELSCOPE_API_KEY.")
+    provider = config.get("provider", "openai")
+    if not config["apiKey"] and provider not in ("ollama",):
+        raise RuntimeError(
+            f"Missing API key for provider '{provider}'. "
+            "Set one of: SOURCE2LAUNCH_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / "
+            "GOOGLE_API_KEY / GEMINI_API_KEY, or use OLLAMA_BASE_URL for local models."
+        )
 
     # Streaming: env var or explicit param
     env = env or os.environ
     use_stream = stream if stream is not None else env.get("SOURCE2LAUNCH_STREAM", "").lower() == "true"
 
     messages = build_promo_messages(result, platform=platform, brief_section=brief_section, examples=examples)
-    url = f"{config['baseUrl']}/chat/completions"
-    headers = {"Authorization": f"Bearer {config['apiKey']}"}
-    base_body: dict[str, Any] = {
-        "model": config["model"],
-        "messages": messages,
-        "temperature": config["temperature"],
-        "max_tokens": config["maxTokens"],
-    }
+    provider = config.get("provider", "openai")
+    print(f"source2launch: generating content [{provider} / {config['model']}]…", file=sys.stderr)
 
-    # --- Call AI (with streaming or not) ---
-    if use_stream:
+    # --- Call AI (streaming only for OpenAI-compatible) ---
+    if use_stream and provider in ("openai", "modelscope"):
+        url = f"{config['baseUrl']}/chat/completions"
+        headers = {"Authorization": f"Bearer {config['apiKey']}"}
+        base_body: dict[str, Any] = {
+            "model": config["model"],
+            "messages": messages,
+            "temperature": config["temperature"],
+            "max_tokens": config["maxTokens"],
+        }
         raw_content = _stream_and_collect(url, base_body, headers=headers, timeout=config["timeout"])
     else:
-        print("source2launch: generating content…", file=sys.stderr)
-        try:
-            response = post_json(url, {**base_body, "response_format": {"type": "json_object"}}, headers=headers, timeout=config["timeout"])
-        except RuntimeError as exc:
-            err = str(exc).lower()
-            if "response_format" in err or "json_object" in err or "unsupported" in err or "invalid" in err:
-                response = post_json(url, base_body, headers=headers, timeout=config["timeout"])
-            else:
-                raise
-        raw_content = extract_chat_content(response)
+        raw_content = dispatch_chat(messages, config)
 
     parsed = parse_json_content(raw_content)
 
@@ -136,17 +209,15 @@ def generate_ai_content(
             print(f"source2launch: found {len(issues)} issue(s) in generated content:", file=sys.stderr)
             for issue in issues:
                 print(f"  ⚠ [{issue['platform']}] {issue['message']}", file=sys.stderr)
-
-            # Auto-fix: one follow-up call to address the issues
             if auto_fix:
-                fixed = _auto_fix(parsed, issues, messages, base_body, url, headers, config)
+                fixed = _auto_fix(parsed, issues, messages, config)
                 if fixed:
                     parsed = fixed
                     print("source2launch: ✓ issues fixed automatically", file=sys.stderr)
 
     # --- Stage 3: compare with examples and auto-improve ---
     if compare_with_examples and examples and parsed:
-        improved = _compare_and_improve(parsed, examples, messages, base_body, url, headers, config)
+        improved = _compare_and_improve(parsed, examples, messages, config)
         if improved:
             parsed = improved
 
@@ -186,9 +257,6 @@ def _compare_and_improve(
     content: dict[str, Any],
     examples: list[str],
     original_messages: list[dict[str, str]],
-    base_body: dict[str, Any],
-    url: str,
-    headers: dict[str, str],
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Compare generated content with examples and run one improvement pass."""
@@ -200,11 +268,8 @@ def _compare_and_improve(
     ]
     print("source2launch: comparing with examples and refining…", file=sys.stderr)
     try:
-        response = post_json(url, {**base_body, "messages": compare_messages},
-                             headers=headers, timeout=config["timeout"])
-        raw = extract_chat_content(response)
+        raw = dispatch_chat(compare_messages, config)
         improved = parse_json_content(raw)
-        # Only use if the response is a valid promo dict
         if isinstance(improved, dict) and improved.get("promotions"):
             return improved
     except Exception:  # noqa: BLE001
@@ -255,26 +320,8 @@ def refine_content(
         {"role": "user", "content": refine_message},
     ]
 
-    url = f"{config['baseUrl']}/chat/completions"
-    headers = {"Authorization": f"Bearer {config['apiKey']}"}
-    body: dict[str, Any] = {
-        "model": config["model"],
-        "messages": refine_messages,
-        "temperature": config["temperature"],
-        "max_tokens": config["maxTokens"],
-    }
-
     print("source2launch: refining content…", file=sys.stderr)
-    try:
-        response = post_json(url, {**body, "response_format": {"type": "json_object"}},
-                             headers=headers, timeout=config["timeout"])
-    except RuntimeError as exc:
-        if any(kw in str(exc).lower() for kw in ("response_format", "json_object", "unsupported")):
-            response = post_json(url, body, headers=headers, timeout=config["timeout"])
-        else:
-            raise
-
-    raw = extract_chat_content(response)
+    raw = dispatch_chat(refine_messages, config)
     refined = parse_json_content(raw)
     return {
         "content": refined,
@@ -360,9 +407,6 @@ def _auto_fix(
     original: dict[str, Any],
     issues: list[dict[str, str]],
     original_messages: list[dict[str, str]],
-    base_body: dict[str, Any],
-    url: str,
-    headers: dict[str, str],
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Send one follow-up message to fix specific quality issues."""
@@ -370,27 +414,18 @@ def _auto_fix(
     fix_request = (
         "以下是上面输出中发现的问题，请修正并输出完整的 JSON（与上次格式相同）：\n\n"
         f"{issue_lines}\n\n"
-        "修正要求：\n"
-        "- 删除所有禁用词（必备/神器/颠覆等），用具体描述代替\n"
-        "- 确保 CTA 在主要平台文案中被引用\n"
-        "- 小红书标题控制在20字以内\n"
-        "- 填写 qualityRubric 三轴审核\n"
         "直接输出 JSON，不要其他解释。"
     )
-
     fix_messages = [
         *original_messages,
         {"role": "assistant", "content": json.dumps(original, ensure_ascii=False)},
         {"role": "user", "content": fix_request},
     ]
-
-    fix_body = {**base_body, "messages": fix_messages}
     try:
-        response = post_json(url, fix_body, headers=headers, timeout=config["timeout"])
-        raw = extract_chat_content(response)
+        raw = dispatch_chat(fix_messages, config)
         return parse_json_content(raw)
     except Exception:  # noqa: BLE001
-        return None  # Fix failed, keep original
+        return None
 
 
 def post_json(url: str, body: dict[str, Any], *, headers: dict[str, str] | None = None, timeout: float = 120) -> dict[str, Any]:
@@ -410,6 +445,133 @@ def post_json(url: str, body: dict[str, Any], *, headers: dict[str, str] | None 
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"AI request failed with HTTP {error.code}: {detail}") from error
+
+
+# ---------------------------------------------------------------------------
+# Provider-specific chat callers
+# ---------------------------------------------------------------------------
+
+def _chat_openai(messages: list[dict], config: dict[str, Any]) -> str:
+    """Call OpenAI-compatible /chat/completions (OpenAI, ModelScope, Ollama-OpenAI, etc.)."""
+    url = f"{config['baseUrl']}/chat/completions"
+    headers = {"Authorization": f"Bearer {config['apiKey']}"}
+    body: dict[str, Any] = {
+        "model": config["model"],
+        "messages": messages,
+        "temperature": config["temperature"],
+        "max_tokens": config["maxTokens"],
+    }
+    try:
+        resp = post_json(url, {**body, "response_format": {"type": "json_object"}}, headers=headers, timeout=config["timeout"])
+    except RuntimeError as exc:
+        err = str(exc).lower()
+        if any(kw in err for kw in ("response_format", "json_object", "unsupported", "invalid")):
+            resp = post_json(url, body, headers=headers, timeout=config["timeout"])
+        else:
+            raise
+    return extract_chat_content(resp)
+
+
+def _chat_anthropic(messages: list[dict], config: dict[str, Any]) -> str:
+    """Call Anthropic Messages API (claude-* models)."""
+    # Anthropic separates system message from the messages array
+    system_content = ""
+    user_messages = []
+    for msg in messages:
+        if msg["role"] == "system":
+            system_content = msg["content"]
+        else:
+            user_messages.append({"role": msg["role"], "content": msg["content"]})
+
+    url = f"{config['baseUrl']}/v1/messages"
+    headers = {
+        "x-api-key": config["apiKey"],
+        "anthropic-version": "2023-06-01",
+    }
+    body: dict[str, Any] = {
+        "model": config["model"],
+        "max_tokens": config["maxTokens"],
+        "messages": user_messages,
+    }
+    if system_content:
+        body["system"] = system_content
+
+    resp = post_json(url, body, headers=headers, timeout=config["timeout"])
+    content_blocks = resp.get("content") or []
+    text = "".join(block.get("text", "") for block in content_blocks if block.get("type") == "text")
+    if not text:
+        raise RuntimeError(f"Anthropic response contained no text content: {resp}")
+    return text
+
+
+def _chat_gemini(messages: list[dict], config: dict[str, Any]) -> str:
+    """Call Google Gemini generateContent API."""
+    # Gemini uses 'contents' with 'parts', and a separate 'systemInstruction'
+    system_content = ""
+    contents = []
+    for msg in messages:
+        if msg["role"] == "system":
+            system_content = msg["content"]
+            continue
+        role = "model" if msg["role"] == "assistant" else "user"
+        contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+
+    model = config["model"]
+    api_key = config["apiKey"]
+    url = f"{config['baseUrl']}/v1beta/models/{model}:generateContent?key={api_key}"
+
+    body: dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": {
+            "maxOutputTokens": config["maxTokens"],
+            "temperature": config["temperature"],
+        },
+    }
+    if system_content:
+        body["systemInstruction"] = {"parts": [{"text": system_content}]}
+
+    resp = post_json(url, body, headers={}, timeout=config["timeout"])
+    candidates = resp.get("candidates") or []
+    if not candidates:
+        raise RuntimeError(f"Gemini returned no candidates: {resp}")
+    parts = candidates[0].get("content", {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts)
+    if not text:
+        raise RuntimeError(f"Gemini response had no text: {resp}")
+    return text
+
+
+def _chat_ollama(messages: list[dict], config: dict[str, Any]) -> str:
+    """Call Ollama local API (/api/chat)."""
+    url = f"{config['baseUrl']}/api/chat"
+    body: dict[str, Any] = {
+        "model": config["model"],
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": config["temperature"],
+            "num_predict": config["maxTokens"],
+        },
+    }
+    # Ollama needs no auth header
+    resp = post_json(url, body, headers={}, timeout=config["timeout"])
+    text = (resp.get("message") or {}).get("content") or ""
+    if not text:
+        raise RuntimeError(f"Ollama returned no content: {resp}")
+    return text
+
+
+def dispatch_chat(messages: list[dict], config: dict[str, Any]) -> str:
+    """Route to the correct provider based on config['provider']."""
+    provider = config.get("provider", "openai")
+    if provider == "anthropic":
+        return _chat_anthropic(messages, config)
+    if provider == "gemini":
+        return _chat_gemini(messages, config)
+    if provider == "ollama":
+        return _chat_ollama(messages, config)
+    # openai / modelscope / any other OpenAI-compatible
+    return _chat_openai(messages, config)
 
 
 def extract_chat_content(response: dict[str, Any]) -> str:

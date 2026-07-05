@@ -10,7 +10,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from source2launch.ai import generate_ai_content, parse_json_content, refine_content, validate_content
+from source2launch.ai import _detect_provider, _chat_anthropic, _chat_gemini, _chat_ollama, generate_ai_content, parse_json_content, refine_content, validate_content
 from source2launch.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
 from source2launch.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
 from source2launch.examples import detect_category, find_examples, format_examples_for_prompt
@@ -201,6 +201,107 @@ class PythonCoreTest(unittest.TestCase):
     def test_parse_json_content_accepts_fenced_json(self):
         parsed = parse_json_content("```json\n{\"ok\": true}\n```")
         self.assertEqual(parsed, {"ok": True})
+
+    # ------------------------------------------------------------------
+    # Multi-provider LLM support
+    # ------------------------------------------------------------------
+
+    def test_detect_provider_from_anthropic_key(self):
+        env = {"ANTHROPIC_API_KEY": "sk-ant-test"}
+        self.assertEqual(_detect_provider({}, env), "anthropic")
+
+    def test_detect_provider_from_gemini_key(self):
+        env = {"GOOGLE_API_KEY": "test-key"}
+        self.assertEqual(_detect_provider({}, env), "gemini")
+
+    def test_detect_provider_from_ollama_url(self):
+        env = {"OLLAMA_BASE_URL": "http://localhost:11434"}
+        self.assertEqual(_detect_provider({}, env), "ollama")
+
+    def test_detect_provider_from_modelscope_key(self):
+        env = {"SOURCE2LAUNCH_MODELSCOPE_API_KEY": "ms-test"}
+        self.assertEqual(_detect_provider({}, env), "modelscope")
+
+    def test_detect_provider_from_explicit_override(self):
+        env = {"SOURCE2LAUNCH_PROVIDER": "anthropic", "OPENAI_API_KEY": "sk-test"}
+        self.assertEqual(_detect_provider({}, env), "anthropic")
+
+    def test_detect_provider_from_claude_model_name(self):
+        opts = {"model": "claude-opus-4-5"}
+        self.assertEqual(_detect_provider(opts, {}), "anthropic")
+
+    def test_detect_provider_from_gemini_model_name(self):
+        opts = {"model": "gemini-2.0-flash"}
+        self.assertEqual(_detect_provider(opts, {}), "gemini")
+
+    def test_detect_provider_defaults_to_openai(self):
+        self.assertEqual(_detect_provider({}, {}), "openai")
+
+    def test_chat_anthropic_with_mock_server(self):
+        """_chat_anthropic converts messages and parses Anthropic response format."""
+        server = MockAnthropicServer(json.dumps({"key": "value"}))
+        server.start()
+        try:
+            result = _chat_anthropic(
+                [
+                    {"role": "system", "content": "You are a helper."},
+                    {"role": "user", "content": "Say hello."},
+                ],
+                {
+                    "apiKey": "test-key",
+                    "baseUrl": server.base_url,
+                    "model": "claude-haiku-4-5",
+                    "maxTokens": 100,
+                    "temperature": 0.7,
+                    "timeout": 10,
+                },
+            )
+        finally:
+            server.stop()
+        self.assertIn("key", result)
+
+    def test_chat_gemini_with_mock_server(self):
+        """_chat_gemini converts messages and parses Gemini response format."""
+        server = MockGeminiServer(json.dumps({"gemini": "response"}))
+        server.start()
+        try:
+            result = _chat_gemini(
+                [
+                    {"role": "system", "content": "You are a helper."},
+                    {"role": "user", "content": "Say hello."},
+                ],
+                {
+                    "apiKey": "test-key",
+                    "baseUrl": server.base_url,
+                    "model": "gemini-flash",
+                    "maxTokens": 100,
+                    "temperature": 0.7,
+                    "timeout": 10,
+                },
+            )
+        finally:
+            server.stop()
+        self.assertIn("gemini", result)
+
+    def test_chat_ollama_with_mock_server(self):
+        """_chat_ollama uses /api/chat endpoint and parses Ollama response."""
+        server = MockOllamaServer(json.dumps({"ollama": "response"}))
+        server.start()
+        try:
+            result = _chat_ollama(
+                [{"role": "user", "content": "Say hello."}],
+                {
+                    "apiKey": "",
+                    "baseUrl": server.base_url,
+                    "model": "llama3.2",
+                    "maxTokens": 100,
+                    "temperature": 0.7,
+                    "timeout": 10,
+                },
+            )
+        finally:
+            server.stop()
+        self.assertIn("ollama", result)
 
     # ------------------------------------------------------------------
     # Prompt presets
@@ -681,6 +782,104 @@ class MockChatServer:
 
     def start(self): self.thread.start()
 
+    def stop(self):
+        self.httpd.shutdown()
+        self.thread.join(timeout=5)
+        self.httpd.server_close()
+
+
+class MockAnthropicHandler(BaseHTTPRequestHandler):
+    """Simulates Anthropic Messages API: POST /v1/messages → content[0].text."""
+    def do_POST(self):  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+        body = json.dumps({
+            "content": [{"type": "text", "text": self.server.response_text}],
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+        }).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, format, *args): return  # noqa: A002
+
+
+class MockAnthropicServer:
+    def __init__(self, response_text: str):
+        self.httpd = HTTPServer(("127.0.0.1", 0), MockAnthropicHandler)
+        self.httpd.response_text = response_text
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+    @property
+    def base_url(self):
+        host, port = self.httpd.server_address
+        return f"http://{host}:{port}"
+    def start(self): self.thread.start()
+    def stop(self):
+        self.httpd.shutdown()
+        self.thread.join(timeout=5)
+        self.httpd.server_close()
+
+
+class MockGeminiHandler(BaseHTTPRequestHandler):
+    """Simulates Google Gemini generateContent API."""
+    def do_POST(self):  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+        body = json.dumps({
+            "candidates": [{"content": {"parts": [{"text": self.server.response_text}]}}]
+        }).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, format, *args): return  # noqa: A002
+
+
+class MockGeminiServer:
+    def __init__(self, response_text: str):
+        self.httpd = HTTPServer(("127.0.0.1", 0), MockGeminiHandler)
+        self.httpd.response_text = response_text
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+    @property
+    def base_url(self):
+        host, port = self.httpd.server_address
+        return f"http://{host}:{port}"
+    def start(self): self.thread.start()
+    def stop(self):
+        self.httpd.shutdown()
+        self.thread.join(timeout=5)
+        self.httpd.server_close()
+
+
+class MockOllamaHandler(BaseHTTPRequestHandler):
+    """Simulates Ollama /api/chat API."""
+    def do_POST(self):  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+        body = json.dumps({
+            "message": {"role": "assistant", "content": self.server.response_text},
+            "done": True,
+        }).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, format, *args): return  # noqa: A002
+
+
+class MockOllamaServer:
+    def __init__(self, response_text: str):
+        self.httpd = HTTPServer(("127.0.0.1", 0), MockOllamaHandler)
+        self.httpd.response_text = response_text
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+    @property
+    def base_url(self):
+        host, port = self.httpd.server_address
+        return f"http://{host}:{port}"
+    def start(self): self.thread.start()
     def stop(self):
         self.httpd.shutdown()
         self.thread.join(timeout=5)
