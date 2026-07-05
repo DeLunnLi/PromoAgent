@@ -11,6 +11,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from source2launch.ai import _detect_provider, _chat_anthropic, _chat_gemini, _chat_ollama, generate_ai_content, parse_json_content, refine_content, validate_content
+from source2launch.publish import (
+    BlueskyPublisher, TelegramPublisher, TwitterPublisher,
+    available_publishers, publish_content,
+)
 from source2launch.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
 from source2launch.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
 from source2launch.examples import detect_category, find_examples, format_examples_for_prompt
@@ -687,6 +691,70 @@ class PythonCoreTest(unittest.TestCase):
                 options={"api_key": "test-key"},
             )
 
+    # ------------------------------------------------------------------
+    # Platform publishers
+    # ------------------------------------------------------------------
+
+    def test_publisher_is_configured_telegram(self):
+        env = {"TELEGRAM_BOT_TOKEN": "123:TOKEN", "TELEGRAM_CHAT_ID": "@channel"}
+        pub = TelegramPublisher(env)
+        self.assertTrue(pub.is_configured())
+
+    def test_publisher_not_configured_without_keys(self):
+        pub = TelegramPublisher({})
+        self.assertFalse(pub.is_configured())
+
+    def test_available_publishers_returns_only_configured(self):
+        env = {
+            "TELEGRAM_BOT_TOKEN": "123:TOKEN",
+            "TELEGRAM_CHAT_ID": "@channel",
+            # Twitter NOT configured
+        }
+        pubs = available_publishers(env)
+        self.assertIn("telegram", pubs)
+        self.assertNotIn("twitter", pubs)
+
+    def test_publish_content_unknown_platform(self):
+        result = publish_content("unknown_platform_xyz", "test content", env={})
+        self.assertFalse(result.ok)
+        self.assertIn("Unknown platform", result.error)
+
+    def test_publish_content_no_api_platform(self):
+        result = publish_content("xiaohongshu", "test content", env={})
+        self.assertFalse(result.ok)
+        self.assertIn("手动", result.error)
+
+    def test_publish_content_missing_credentials(self):
+        result = publish_content("telegram", "test content", env={})
+        self.assertFalse(result.ok)
+        self.assertIn("Missing env vars", result.error)
+
+    def test_telegram_publish_with_mock_server(self):
+        server = MockTelegramServer()
+        server.start()
+        env = {
+            "TELEGRAM_BOT_TOKEN": "fake-token",
+            "TELEGRAM_CHAT_ID": "@testchannel",
+        }
+        try:
+            pub = TelegramPublisher(env)
+            pub._BASE_URL = server.base_url  # redirect to mock
+            # Override the URL in _post by patching
+            original_post = pub._post
+            def patched_post(url, body, headers=None):
+                new_url = url.replace("https://api.telegram.org", server.base_url)
+                return original_post(new_url, body, headers)
+            pub._post = patched_post
+            result = pub.publish("测试发布内容")
+        finally:
+            server.stop()
+        self.assertTrue(result.ok)
+        self.assertEqual(result.platform, "telegram")
+
+    def test_bluesky_publisher_requires_handle_and_password(self):
+        pub = BlueskyPublisher({"BLUESKY_HANDLE": "test.bsky.social"})
+        self.assertFalse(pub.is_configured())  # missing password
+
     def test_dotenv_loads_keys_not_already_in_environ(self):
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"
@@ -782,6 +850,35 @@ class MockChatServer:
 
     def start(self): self.thread.start()
 
+    def stop(self):
+        self.httpd.shutdown()
+        self.thread.join(timeout=5)
+        self.httpd.server_close()
+
+
+class MockTelegramHandler(BaseHTTPRequestHandler):
+    """Simulates Telegram Bot API: POST /botTOKEN/sendMessage → ok response."""
+    def do_POST(self):  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+        body = json.dumps({"ok": True, "result": {"message_id": 42}}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, format, *args): return  # noqa: A002
+
+
+class MockTelegramServer:
+    def __init__(self):
+        self.httpd = HTTPServer(("127.0.0.1", 0), MockTelegramHandler)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+    @property
+    def base_url(self):
+        host, port = self.httpd.server_address
+        return f"http://{host}:{port}"
+    def start(self): self.thread.start()
     def stop(self):
         self.httpd.shutdown()
         self.thread.join(timeout=5)

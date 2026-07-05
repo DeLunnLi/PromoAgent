@@ -29,6 +29,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_refine(args)
         if args.command == "serve":
             return _run_serve(args)
+        if args.command == "publish":
+            return _run_publish_cmd(args)
         return _run_analyze(args)
     except Exception as error:  # noqa: BLE001
         print(f"source2launch: {error}", file=sys.stderr)
@@ -80,6 +82,20 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Override image model ID (default: from SOURCE2LAUNCH_IMAGE_MODEL or Qwen/Qwen-Image).")
     _add_ai_options(optimize)
     _add_context_options(optimize)
+
+    # publish
+    publish_p = sub.add_parser("publish", help="Publish generated content to social platforms.")
+    publish_p.add_argument("platform", nargs="?", default=None,
+                           help="Platform to publish to: telegram, bluesky, twitter, linkedin, reddit, weibo. "
+                                "Omit to see all configured platforms.")
+    publish_p.add_argument("--content", help="Content to publish (overrides reading from --assets-dir).")
+    publish_p.add_argument("--assets-dir", default="launch-assets",
+                           help="Directory with generated promo files (default: launch-assets).")
+    publish_p.add_argument("--title", default="", help="Post title (Reddit).")
+    publish_p.add_argument("--chat-id", default="", help="Telegram chat/channel ID (overrides env var).")
+    publish_p.add_argument("--dry-run", action="store_true",
+                           help="Show what would be published without actually posting.")
+    publish_p.add_argument("--list", action="store_true", help="List all configured publishers.")
 
     # serve
     serve = sub.add_parser("serve", help="Launch the web interface in a browser.")
@@ -341,6 +357,56 @@ def _format_ai_output(result: dict[str, Any], content: dict[str, Any]) -> str:
     if len(lines) <= 4:
         lines.append(json.dumps(content, ensure_ascii=False, indent=2))
     return "\n".join(lines).rstrip()
+
+
+def _run_publish_cmd(args: argparse.Namespace) -> int:
+    from .publish import (
+        NO_API_PLATFORMS, available_publishers, load_content_from_assets, publish_content,
+    )
+
+    # --list: show configured publishers
+    if getattr(args, "list", False) or args.platform is None:
+        pubs = available_publishers()
+        if pubs:
+            print(f"Configured publishers: {', '.join(pubs)}")
+        else:
+            print("No publishers configured. Add credentials to .env for any of:")
+            print("  telegram, bluesky, twitter, linkedin, reddit, weibo")
+        print(f"\nNo-API platforms (manual only): {', '.join(NO_API_PLATFORMS)}")
+        return 0
+
+    platform = args.platform.lower().strip()
+
+    # Dry-run preview
+    if getattr(args, "dry_run", False):
+        try:
+            content = args.content or load_content_from_assets(args.assets_dir, platform)
+        except FileNotFoundError as exc:
+            print(f"source2launch: {exc}", file=sys.stderr)
+            return 1
+        print(f"[DRY RUN] Would publish to {platform}:\n")
+        print(content[:500] + ("…" if len(content) > 500 else ""))
+        return 0
+
+    # Load content
+    try:
+        content = args.content or load_content_from_assets(args.assets_dir, platform)
+    except FileNotFoundError as exc:
+        print(f"source2launch: {exc}", file=sys.stderr)
+        print(f"Tip: Run `source2launch optimize --ai` first to generate content.", file=sys.stderr)
+        return 1
+
+    # Publish
+    kwargs: dict = {}
+    if getattr(args, "title", ""):
+        kwargs["title"] = args.title
+    if getattr(args, "chat_id", ""):
+        kwargs["chat_id"] = args.chat_id
+
+    print(f"Publishing to {platform}…", file=sys.stderr)
+    result = publish_content(platform, content, **kwargs)
+    print(result)
+    return 0 if result.ok else 1
 
 
 def _run_serve(args: argparse.Namespace) -> int:
