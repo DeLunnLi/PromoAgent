@@ -351,14 +351,64 @@ def build_app() -> Any:
                 status_md = gr.Markdown("等待生成…")
 
                 with gr.Tabs() as result_tabs:
-                    platform_outputs: list[gr.Markdown] = []
+                    platform_outputs: list[gr.Textbox] = []
+                    preview_boxes: list[gr.Markdown] = []
+                    fill_btns: list[gr.Button] = []
+
                     for key in _ALL_PLATFORMS:
                         with gr.Tab(_platform_label(key)):
-                            md = gr.Markdown(
-                                "尚未生成，点击「生成推广内容」开始。",
+                            # Editable content area
+                            tb = gr.Textbox(
+                                value="尚未生成，点击「生成推广内容」开始。",
+                                lines=12,
+                                max_lines=35,
+                                label="内容（可直接编辑）",
+                                show_copy_button=True,
                                 elem_classes=["platform-content"],
                             )
-                            platform_outputs.append(md)
+                            platform_outputs.append(tb)
+
+                            # Live Markdown preview — updates as user edits
+                            preview_md = gr.Markdown(
+                                label="Markdown 预览",
+                                visible=True,
+                                elem_classes=["platform-content"],
+                            )
+                            preview_boxes.append(preview_md)
+
+                            # Sync textbox → preview in real time
+                            tb.change(fn=lambda x: x, inputs=[tb], outputs=[preview_md])
+
+                            # Fill-to-browser button
+                            fill_btn = gr.Button(
+                                f"🌐 在浏览器中填写到 {_platform_label(key)}",
+                                elem_classes=["secondary-btn"],
+                                size="sm",
+                            )
+                            fill_btns.append(fill_btn)
+
+                            # Fill to browser — runs in background thread
+                            _key = key  # capture loop variable
+
+                            def _fill_browser(content, platform=_key):
+                                import threading
+                                try:
+                                    from .browser import fill_platform
+                                    t = threading.Thread(
+                                        target=fill_platform,
+                                        args=(platform, content),
+                                        daemon=True,
+                                    )
+                                    t.start()
+                                    return gr.update()
+                                except SystemExit:
+                                    return gr.update()
+
+                            fill_btn.click(
+                                fn=_fill_browser,
+                                inputs=[tb],
+                                outputs=[],
+                            )
 
                 with gr.Row():
                     image_output = gr.Image(
@@ -399,7 +449,8 @@ def build_app() -> Any:
         )
 
         def _clear():
-            return ["等待生成…"] + [""] * len(_ALL_PLATFORMS) + [gr.update(visible=False), None, ""]
+            empty = ["尚未生成，点击「生成推广内容」开始。"] * len(_ALL_PLATFORMS)
+            return ["等待生成…"] + empty + [gr.update(visible=False), None, ""]
 
         clear_btn.click(
             fn=_clear,
