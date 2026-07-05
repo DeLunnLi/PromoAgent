@@ -27,45 +27,67 @@ FETCH_TIMEOUT = 15
 # Category detection
 # ---------------------------------------------------------------------------
 
-# Keyword → category mapping (Chinese + English)
-_CATEGORY_KEYWORDS: list[tuple[list[str], str]] = [
-    (["火锅", "餐厅", "咖啡", "奶茶", "烤肉", "寿司", "餐饮", "美食", "restaurant", "cafe", "food"], "餐饮美食"),
-    (["app", "软件", "saas", "工具", "开源", "代码", "github", "api", "sdk", "cli", "plugin"], "科技/开源项目"),
-    (["论文", "paper", "研究", "arxiv", "study", "model", "dataset", "benchmark"], "学术研究"),
-    (["课程", "培训", "教育", "学习", "教学", "course", "tutorial", "education"], "教育培训"),
-    (["电商", "购物", "商品", "产品", "product", "shop", "store", "sale", "折扣", "优惠"], "电商/产品"),
-    (["活动", "演出", "展览", "展会", "concert", "event", "exhibition", "festival"], "活动/展览"),
-    (["健身", "瑜伽", "运动", "健康", "wellness", "gym", "fitness", "sport"], "健康/运动"),
-    (["旅游", "酒店", "民宿", "旅行", "travel", "hotel", "hostel", "tour"], "旅游/住宿"),
-    (["美妆", "护肤", "彩妆", "beauty", "skincare", "cosmetic", "makeup"], "美妆/护肤"),
-]
+def detect_category(result: dict[str, Any], ai_options: dict[str, Any] | None = None, env: dict[str, str] | None = None) -> str:
+    """Detect the promotional content category using AI understanding.
 
-_DEFAULT_CATEGORY = "通用产品/服务"
-
-
-def detect_category(result: dict[str, Any]) -> str:
-    """Detect the promotional content category from an analysis result."""
-    # Gather all text signals
+    Falls back to a lightweight source-type heuristic when no AI key is available.
+    """
     project = result.get("project", {})
     evidence = result.get("evidence", {})
-    text = " ".join(filter(None, [
+
+    # Build a concise description for classification
+    description = " ".join(filter(None, [
         project.get("name", ""),
         project.get("description", ""),
-        evidence.get("opening", ""),
-        evidence.get("readmeOpening", ""),
+        evidence.get("opening", "") or evidence.get("readmeOpening", ""),
         " ".join(project.get("topics", [])),
-        result.get("target", ""),
-    ])).lower()
+    ])).strip()[:300]
 
-    for keywords, category in _CATEGORY_KEYWORDS:
-        if any(kw in text for kw in keywords):
-            return category
+    if not description:
+        description = str(result.get("target", ""))[:200]
 
-    # Special case: GitHub / local repo → tech project
-    if result.get("source") in ("github", "local"):
-        return "科技/开源项目"
+    # Fast heuristic: if no AI key, use source type
+    env = env or os.environ
+    has_key = bool(
+        env.get("SOURCE2LAUNCH_API_KEY") or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY")
+        or env.get("OPENAI_API_KEY") or env.get("MODELSCOPE_API_KEY")
+    )
+    if not has_key:
+        source = result.get("source", "")
+        if source in ("github", "local"):
+            return "科技/开源项目"
+        if source in ("file",) and result.get("inputType") in ("pdf", "document"):
+            return "学术研究/文档"
+        return "通用产品/服务"
 
-    return _DEFAULT_CATEGORY
+    # AI-based classification
+    from .ai import ai_config, post_json, extract_chat_content
+    config = ai_config(ai_options, env)
+    prompt = (
+        f"请用2-5个字说明以下内容属于什么推广类型（例如：餐饮美食、科技工具、学术论文、教育课程、电商产品…）。\n"
+        f"只回答类型名称，不要其他内容。\n\n内容描述：{description}"
+    )
+    try:
+        resp = post_json(
+            f"{config['baseUrl']}/chat/completions",
+            {
+                "model": config["model"],
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 20,
+                "temperature": 0,
+            },
+            headers={"Authorization": f"Bearer {config['apiKey']}"},
+            timeout=10,
+        )
+        return extract_chat_content(resp).strip()[:30]
+    except Exception:  # noqa: BLE001
+        # AI failed → fall back to source-type heuristic
+        source = result.get("source", "")
+        if source in ("github", "local"):
+            return "科技/开源项目"
+        if source == "file" and result.get("inputType") in ("pdf", "document"):
+            return "学术研究/文档"
+        return "通用产品/服务"
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +256,7 @@ def find_examples(
     """
     env = env or os.environ
     ai_options = ai_options or {}
-    category = detect_category(result)
+    category = detect_category(result, ai_options=ai_options, env=env)
 
     if verbose:
         print(f"source2launch: finding reference examples [{category} / {platform}]…", file=sys.stderr)

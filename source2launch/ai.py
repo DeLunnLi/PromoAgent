@@ -190,56 +190,30 @@ def _stream_and_collect(url: str, base_body: dict[str, Any], *, headers: dict[st
 
 
 # ---------------------------------------------------------------------------
-# Validation
+# Validation — structural only, no hardcoded rules
 # ---------------------------------------------------------------------------
 
-_BANNED_WORDS = ["必备", "神器", "高质量", "颠覆", "最强", "完美", "爆款", "轻松搞定", "一键", "秒变"]
-
-
 def validate_content(content: dict[str, Any], result: dict[str, Any]) -> list[dict[str, str]]:
-    """Check common quality issues in the generated content.
+    """Check structural completeness of the generated content.
 
-    Returns a list of issue dicts: {"platform": ..., "message": ...}
+    Validates structure only (are required fields present?).
+    Quality judgment is delegated to the AI's own qualityRubric.
     """
     issues: list[dict[str, str]] = []
     promotions = content.get("promotions") or {}
-    project = result.get("project", {})
-    evidence = result.get("evidence", {})
 
-    cta = (
-        project.get("cta")
-        or project.get("installCommand")
-        or project.get("homepage")
-        or project.get("repositoryUrl")
+    # At least one platform must have a non-empty markdown
+    has_any_content = any(
+        isinstance(post, dict) and post.get("markdown")
+        for post in promotions.values()
     )
+    if not has_any_content:
+        issues.append({"platform": "all", "message": "没有生成任何平台内容"})
 
-    for platform, post in promotions.items():
-        if not isinstance(post, dict):
-            continue
-        md = post.get("markdown") or ""
-        if not md:
-            continue
-
-        # Check banned words
-        found_banned = [w for w in _BANNED_WORDS if w in md]
-        if found_banned:
-            issues.append({"platform": platform, "message": f"含禁用词：{', '.join(found_banned)}"})
-
-        # Check CTA is referenced (only if we have one)
-        if cta and len(cta) > 5 and cta not in md:
-            issues.append({"platform": platform, "message": f"CTA 未被引用（应包含：{cta[:40]}）"})
-
-    # XHS title length
-    xhs = promotions.get("xiaohongshu") or {}
-    for title in xhs.get("titles") or []:
-        if len(str(title)) > 20:
-            issues.append({"platform": "xhs", "message": f"标题超过20字（{len(title)}字）：{title}"})
-
-    # qualityRubric must be filled
+    # qualityRubric should exist
     rubric = (content.get("promotionStrategy") or {}).get("qualityRubric") or {}
-    for axis in ["fidelity", "engagement", "alignment"]:
-        if not (rubric.get(axis) or {}).get("checks"):
-            issues.append({"platform": "all", "message": f"qualityRubric.{axis}.checks 为空"})
+    if not rubric:
+        issues.append({"platform": "all", "message": "qualityRubric 缺失，无法进行三轴审核"})
 
     return issues
 
