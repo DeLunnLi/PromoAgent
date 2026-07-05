@@ -13,6 +13,7 @@ from pathlib import Path
 from source2launch.ai import generate_ai_content, parse_json_content
 from source2launch.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
 from source2launch.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
+from source2launch.examples import detect_category, find_examples, format_examples_for_prompt
 from source2launch.interactive import has_significant_gaps, identify_gaps
 from source2launch.optimize import run_optimize
 from source2launch.promo_prompts import PROMPT_PRESETS, PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_user_prompt, expand_presets
@@ -305,6 +306,70 @@ class PythonCoreTest(unittest.TestCase):
     # ------------------------------------------------------------------
     # .env loading
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Two-stage: category detection + example finding
+    # ------------------------------------------------------------------
+
+    def test_detect_category_restaurant(self):
+        result = analyze_free_text("上海阿强火锅，主打麻辣鲜香，人均80元")
+        category = detect_category(result)
+        self.assertIn("餐饮", category)
+
+    def test_detect_category_tech(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        category = detect_category(result)
+        self.assertIn("科技", category)
+
+    def test_detect_category_github(self):
+        result = {"source": "github", "project": {"name": "whisper", "description": "automatic speech recognition"}, "evidence": {}, "target": ""}
+        category = detect_category(result)
+        self.assertIn("科技", category)
+
+    def test_format_examples_for_prompt(self):
+        examples = ["这是示例一的内容，非常精彩", "这是示例二，风格不同"]
+        formatted = format_examples_for_prompt(examples, platform="xhs")
+        self.assertIn("参考示例", formatted)
+        self.assertIn("示例 1", formatted)
+        self.assertIn("示例 2", formatted)
+        self.assertIn("不要复制内容", formatted)
+
+    def test_format_examples_empty(self):
+        self.assertEqual(format_examples_for_prompt([]), "")
+
+    def test_find_examples_no_key_returns_empty_or_ai(self):
+        """Without API keys, find_examples should return empty list gracefully."""
+        result = analyze_free_text("上海火锅店推广")
+        # Remove all API keys for this test
+        env_backup = {k: os.environ.pop(k, None) for k in [
+            "TAVILY_API_KEY", "SOURCE2LAUNCH_API_KEY", "SOURCE2LAUNCH_MODELSCOPE_API_KEY",
+            "OPENAI_API_KEY", "MODELSCOPE_API_KEY"
+        ]}
+        try:
+            examples = find_examples(result, platform="xhs", verbose=False)
+            # Without any API key, should return empty list (not crash)
+            self.assertIsInstance(examples, list)
+        finally:
+            for k, v in env_backup.items():
+                if v is not None:
+                    os.environ[k] = v
+
+    def test_examples_injected_in_prompt(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        payload = {"project": result["project"], "evidence": result["evidence"]}
+        examples = ["示例内容1：这是一个优质的小红书帖子示例", "示例内容2：另一个不同风格的示例"]
+        prompt = build_promo_user_prompt(payload, platform="xhs", examples=examples)
+        self.assertIn("参考示例", prompt)
+        self.assertIn("示例内容1", prompt)
+        self.assertIn("不要复制内容", prompt)
+
+    def test_examples_not_injected_when_empty(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        payload = {"project": result["project"], "evidence": result["evidence"]}
+        prompt_without = build_promo_user_prompt(payload, platform="xhs", examples=[])
+        prompt_with_none = build_promo_user_prompt(payload, platform="xhs", examples=None)
+        self.assertNotIn("参考示例", prompt_without)
+        self.assertNotIn("参考示例", prompt_with_none)
 
     # ------------------------------------------------------------------
     # Image generation

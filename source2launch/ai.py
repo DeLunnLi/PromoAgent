@@ -63,11 +63,19 @@ def build_promo_payload(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_promo_messages(result: dict[str, Any], *, platform: str = "all", brief_section: str = "") -> list[dict[str, str]]:
+def build_promo_messages(
+    result: dict[str, Any],
+    *,
+    platform: str = "all",
+    brief_section: str = "",
+    examples: list[str] | None = None,
+) -> list[dict[str, str]]:
     payload = build_promo_payload(result)
     return [
         {"role": "system", "content": build_promo_system_prompt()},
-        {"role": "user", "content": build_promo_user_prompt(payload, platform=platform, brief_section=brief_section)},
+        {"role": "user", "content": build_promo_user_prompt(
+            payload, platform=platform, brief_section=brief_section, examples=examples
+        )},
     ]
 
 
@@ -76,13 +84,14 @@ def generate_ai_content(
     *,
     platform: str = "all",
     brief_section: str = "",
+    examples: list[str] | None = None,
     options: dict[str, Any] | None = None,
     env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     config = ai_config(options, env)
     if not config["apiKey"]:
         raise RuntimeError("Missing AI API key. Set SOURCE2LAUNCH_API_KEY or SOURCE2LAUNCH_MODELSCOPE_API_KEY.")
-    messages = build_promo_messages(result, platform=platform, brief_section=brief_section)
+    messages = build_promo_messages(result, platform=platform, brief_section=brief_section, examples=examples)
     url = f"{config['baseUrl']}/chat/completions"
     headers = {"Authorization": f"Bearer {config['apiKey']}"}
     base_body: dict[str, Any] = {

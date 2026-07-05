@@ -207,7 +207,13 @@ def build_promo_system_prompt() -> str:
     ])
 
 
-def build_promo_user_prompt(payload: dict[str, Any], *, platform: str = "all", brief_section: str = "") -> str:
+def build_promo_user_prompt(
+    payload: dict[str, Any],
+    *,
+    platform: str = "all",
+    brief_section: str = "",
+    examples: list[str] | None = None,
+) -> str:
     platform_hint = (
         "请生成所有平台的完整 markdown 字段。launchSequence 按准备度给出发布顺序。"
         if platform == "all"
@@ -222,6 +228,14 @@ def build_promo_user_prompt(payload: dict[str, Any], *, platform: str = "all", b
     ]
     if brief_section:
         parts.extend([brief_section, ""])
+
+    # Inject few-shot examples (Stage 1 output)
+    if examples:
+        from .examples import format_examples_for_prompt
+        example_section = format_examples_for_prompt(examples, platform)
+        if example_section:
+            parts.extend([example_section, ""])
+
     parts.extend([
         "## 写作要求",
         "",

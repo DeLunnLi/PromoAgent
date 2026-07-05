@@ -49,6 +49,8 @@ def _build_parser() -> argparse.ArgumentParser:
     promote.add_argument("--ai", action="store_true", help="Call the configured AI model to generate copy.")
     promote.add_argument("--interactive", "-i", action="store_true",
                          help="Ask clarifying questions before generating (auto-enabled when info is thin).")
+    promote.add_argument("--no-examples", action="store_true",
+                         help="Skip Stage 1 example search; generate directly (faster, no extra API call).")
     promote.add_argument("--json", action="store_true", help="Print JSON output.")
     promote.add_argument("-o", "--output", help="Write output to a file.")
     _add_ai_options(promote)
@@ -62,6 +64,8 @@ def _build_parser() -> argparse.ArgumentParser:
     optimize.add_argument("--ai", action="store_true", help="Call the configured AI model to generate copy.")
     optimize.add_argument("--interactive", "-i", action="store_true",
                          help="Ask clarifying questions before generating.")
+    optimize.add_argument("--no-examples", action="store_true",
+                         help="Skip Stage 1 example search.")
     optimize.add_argument("--image", action="store_true",
                           help="Also generate cover images (README screenshots + AI cover). "
                                "Requires SOURCE2LAUNCH_MODELSCOPE_API_KEY for AI images.")
@@ -204,12 +208,21 @@ def _call_ai(result: dict[str, Any], *, platform: str, brief: str, args: argpars
         raise RuntimeError(
             "No API key found. Set SOURCE2LAUNCH_API_KEY or SOURCE2LAUNCH_MODELSCOPE_API_KEY in .env or environment."
         )
-    return generate_ai_content(result, platform=platform, brief_section=brief, options={
+    options = {
         "model": getattr(args, "model", None),
         "base_url": getattr(args, "base_url", None),
         "max_tokens": getattr(args, "max_tokens", None),
         "temperature": getattr(args, "temperature", None),
-    })
+    }
+    # Stage 1: find reference examples
+    no_examples = getattr(args, "no_examples", False)
+    examples: list[str] | None = None
+    if not no_examples:
+        from .examples import find_examples
+        examples = find_examples(result, platform=platform, ai_options=options) or None
+
+    # Stage 2: generate with examples as few-shot context
+    return generate_ai_content(result, platform=platform, brief_section=brief, examples=examples, options=options)
 
 
 def _build_brief(args: argparse.Namespace) -> str:
