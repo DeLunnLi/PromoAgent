@@ -181,17 +181,26 @@ PROMO_JSON_SCHEMA = "\n".join([
 def build_promo_system_prompt() -> str:
     return "\n".join([
         "你是项目/论文发布内容策划 + 多平台内容主编，专门把开源仓库、论文 PDF、README 和来源证据转成可人工审核的推广 Markdown 文件。",
-        "你会收到 README 原文、安装命令、Demo 证据、论文/PDF 摘要、launchRisks 等。请独立阅读 evidence，基于真实证据写作。",
+        "你会收到项目描述、安装命令、README 章节、文档片段和 launchRisks 等。请独立阅读 evidence，基于真实证据写作。",
         "",
         "## 可信度铁律",
-        "- 禁止编造 star 增长数量、用户数量、媒体报道、他人评价、benchmark 或论文结果。",
+        "- 禁止编造 star 数量、用户数量、媒体报道、他人评价、benchmark 或论文结果。",
         "- 只使用 README、PDF、截图、命令、代码或用户提供材料中可核实的事实。",
         "- 若来源证据不足，请写 caveat 或审核问题，不要补编。",
+        "- 不要使用「必备」「神器」「高质量」「提升效率」「打造完整」「颠覆」「最强」等空泛词。",
+        "",
+        "## 各平台写作标准",
+        "**小红书**：2-3 个标题备选（≤20字）+ 转盘结构正文。每张卡片一个结论 + 一个来源证据。轻松口语化，避免广告腔。",
+        "**知乎**：结论先行 → 背景 → 方法/工作流 → 来源证据 → 局限 → 适合谁读。像技术答案，不像推广稿。",
+        "**微信**：公众号文章结构（标题/摘要/章节/正文）+ 朋友圈短文（≤140字，一个结论 + 一个行动）。",
+        "**Show HN**：Plain English 标题 → 做了什么 → 怎么试用 → 关键实现细节 → 2 条真实局限。不要求投票。",
+        "**Product Hunt**：Tagline（≤60字）+ 首条 maker comment（个人故事 + 局限 + 反馈请求）。",
+        "**Twitter/X**：一个角度 + 一个具体证据（命令/图/数据）+ ≤2 个标签，140-220 中文字或 200-280 英文字。",
         "",
         "## AutoPR-style 三轴审核",
-        "- Fidelity：检查事实准确性、核心贡献覆盖、术语/作者/标题/命令是否与来源一致。",
-        "- Engagement：检查开头是否具体、叙事是否清楚、CTA 是否指向读论文/试命令/看仓库。",
-        "- Alignment：检查平台语气、节奏、标签、图片比例和图文配合是否匹配。",
+        "- Fidelity：事实准确性、核心贡献覆盖、术语/命令是否与来源一致。",
+        "- Engagement：开头是否具体、叙事是否清楚、CTA 是否指向试命令/看仓库/读论文。",
+        "- Alignment：平台语气、节奏、标签、图文配合是否匹配。",
         "- 每次输出都要填写 promotionStrategy.qualityRubric。",
         "",
         "只输出严格 JSON，不要 Markdown 代码块，不要解释 JSON 之外的内容。",
@@ -199,29 +208,44 @@ def build_promo_system_prompt() -> str:
 
 
 def build_promo_user_prompt(payload: dict[str, Any], *, platform: str = "all", brief_section: str = "") -> str:
-    platform_hint = "请生成所有平台的完整 markdown 字段。launchSequence 按准备度给出发布顺序。" if platform == "all" else f"重点打磨 {platform} 对应平台，其他平台给出简短可用 markdown。"
+    platform_hint = (
+        "请生成所有平台的完整 markdown 字段。launchSequence 按准备度给出发布顺序。"
+        if platform == "all"
+        else f"重点打磨 {platform} 对应平台，其他平台给出简短可用 markdown。"
+    )
     parts = [
-        "请基于以下来源数据，生成各平台可直接发布的推广 Markdown 文件内容。",
+        "请基于以下来源数据，生成各平台可直接使用的推广 Markdown 内容。",
         "",
-        "## 写作时必须引用的真实证据（不可违背）",
+        "## 项目来源证据（必须引用，不可违背）",
         build_evidence_brief(payload),
         "",
     ]
     if brief_section:
         parts.extend([brief_section, ""])
     parts.extend([
-        "写作时请参考优秀开源项目的 Launch Kit 写法：",
-        "- 规划层：先抽取来源材料，再合成主推广角度，最后按平台改写，并给出 fidelity / engagement / platform alignment 三轴审核。",
-        "- 三轴审核必须写入 promotionStrategy.qualityRubric，不要只给笼统建议。",
-        "- Show HN：个人故事 + 具体问题 + 技术切入点 + 首条评论 + 2 条 limitations。",
-        "- 小红书：像记录一次排查 README 的过程，不要写虚假 star 增长。",
+        "## 写作要求",
         "",
-        "JSON 输出结构必须是：",
+        "**第一步：提取核心推广角度**",
+        "- 从来源证据中找出最独特的卖点：解决了什么具体问题？用什么方法？有什么可验证的证明？",
+        "- 写入 promotionStrategy.coreAngle，作为所有平台内容的统一基础。",
+        "",
+        "**第二步：按平台改写**",
+        "- 每个平台结构不同，不要跨平台复用同一段话。",
+        "- 第一句话必须具体：不要写「介绍一个工具」，而是写「用一条命令把 GitHub 仓库变成小红书文案」。",
+        "- CTA 指向真实下一步：`pip install`、试命令、看仓库、读论文，不要写泛泛的「欢迎关注」。",
+        "",
+        "**第三步：三轴审核**",
+        "- 每条内容都要自问：事实能否从 README/论文/命令中找到来源？开头是否具体到一个场景？语气是否匹配这个平台？",
+        "- 将审核结果写入 promotionStrategy.qualityRubric。",
+        "",
+        "**禁止**：编造数据、使用「必备/神器/高质量/颠覆」等空泛词、所有平台用同一段话。",
+        "",
+        "JSON 输出结构：",
         PROMO_JSON_SCHEMA,
         "",
         platform_hint,
         "",
-        "完整仓库数据：",
+        "完整来源数据：",
         json.dumps(payload, ensure_ascii=False, indent=2),
     ])
     return "\n".join(parts)
@@ -230,20 +254,56 @@ def build_promo_user_prompt(payload: dict[str, Any], *, platform: str = "all", b
 def build_evidence_brief(payload: dict[str, Any]) -> str:
     project = payload.get("project", {})
     evidence = payload.get("evidence", {})
-    lines = [f"- 项目：{project.get('name', 'unknown')}"]
+    lines = [f"- 项目名：{project.get('name', 'unknown')}"]
+
     if project.get("description"):
-        lines.append(f"- 描述：{project['description']}")
+        lines.append(f"- 一句话描述：{project['description']}")
+
     if project.get("installCommand"):
-        lines.append(f"- 安装命令（必须原样使用）：`{project['installCommand']}`")
+        lines.append(f"- 安装/运行命令（必须原样使用）：`{project['installCommand']}`")
+
     if project.get("repositoryUrl"):
-        lines.append(f"- 仓库：{project['repositoryUrl']}")
+        lines.append(f"- 仓库地址：{project['repositoryUrl']}")
+
+    if project.get("homepage"):
+        lines.append(f"- 主页：{project['homepage']}")
+
     if project.get("topics"):
-        lines.append(f"- Topics：{', '.join(project['topics'])}")
-    if evidence.get("readmeOpening"):
-        lines.append(f"- README 开头片段：{str(evidence['readmeOpening']).strip()[:200]}…")
+        lines.append(f"- 关键词/Topics：{', '.join(project['topics'])}")
+
+    if project.get("stars") is not None:
+        lines.append(f"- Stars：{project['stars']}")
+
+    opening = evidence.get("readmeOpening", "")
+    if opening:
+        lines.append(f"- README 开头（项目定位）：{opening[:300]}")
+
+    # Key headings — shows what the README covers
+    headings = evidence.get("headings") or []
+    h2 = [h["text"] for h in headings if h.get("level") == 2][:8]
+    if h2:
+        lines.append(f"- README 章节：{' / '.join(h2)}")
+
+    # Install commands — concrete proof
+    cmds = evidence.get("installCommands") or []
+    extra_cmds = [c for c in cmds if c != project.get("installCommand")][:3]
+    if extra_cmds:
+        lines.append(f"- 其他命令示例：{' | '.join(f'`{c}`' for c in extra_cmds)}")
+
+    # Document clips (for PDF/doc sources)
+    clips = evidence.get("documentClips") or []
+    if clips:
+        lines.append("- 文档摘要片段：")
+        for clip in clips[:2]:
+            text = clip.get("text", "") if isinstance(clip, dict) else str(clip)
+            lines.append(f"  > {text[:150].replace(chr(10), ' ')}")
+
+    # Launch risks (honest limitations / Show HN material)
     risks = evidence.get("launchRisks") or []
     if risks:
-        lines.append("- launchRisks（可诚实提及或用于 Show HN limitations）：")
+        lines.append("- 发布前注意（可用于 Show HN limitations）：")
         for risk in risks[:3]:
-            lines.append(f"  - {risk.get('message') if isinstance(risk, dict) else risk}")
+            msg = risk.get("message") if isinstance(risk, dict) else str(risk)
+            lines.append(f"  - {msg}")
+
     return "\n".join(lines)

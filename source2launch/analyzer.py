@@ -151,6 +151,42 @@ def analyze_repository_path(root: str | os.PathLike[str]) -> dict[str, Any]:
     }
 
 
+def parse_pyproject_meta(text: str) -> dict[str, Any]:
+    """Extract name, description, keywords, and URLs from pyproject.toml text using regex."""
+    result: dict[str, Any] = {}
+    # Isolate the [project] section (up to the next [section])
+    section = re.search(r"\[project\](.*?)(?=^\[|\Z)", text, re.S | re.M)
+    if not section:
+        return result
+    body = section.group(1)
+
+    m = re.search(r'^name\s*=\s*"([^"]+)"', body, re.M)
+    if m:
+        result["name"] = m.group(1)
+
+    m = re.search(r'^description\s*=\s*"([^"]+)"', body, re.M)
+    if m:
+        result["description"] = m.group(1)
+
+    kw_block = re.search(r'^keywords\s*=\s*\[(.*?)\]', body, re.S | re.M)
+    if kw_block:
+        result["keywords"] = re.findall(r'"([^"]+)"', kw_block.group(1))
+
+    # [project.urls] section
+    urls_section = re.search(r"\[project\.urls\](.*?)(?=^\[|\Z)", text, re.S | re.M)
+    if urls_section:
+        for key, val in re.findall(r'"?(\w[\w\s-]*)"?\s*=\s*"([^"]+)"', urls_section.group(1)):
+            if re.search(r"repo|source|code|git", key, re.I):
+                result["repositoryUrl"] = val.strip()
+                break
+        for key, val in re.findall(r'"?(\w[\w\s-]*)"?\s*=\s*"([^"]+)"', urls_section.group(1)):
+            if re.search(r"home|site|web|doc", key, re.I):
+                result["homepage"] = val.strip()
+                break
+
+    return result
+
+
 def collect_facts(root: Path) -> dict[str, Any]:
     files = walk(root)
     readme_path = find_root_file(files, re.compile(r"^readme(\.(md|mdx|markdown|rst|txt))?$", re.I))
@@ -159,8 +195,11 @@ def collect_facts(root: Path) -> dict[str, Any]:
     cargo_path = find_root_file(files, re.compile(r"^Cargo\.toml$"))
     go_mod_path = find_root_file(files, re.compile(r"^go\.mod$"))
     package_json = read_json(root / package_path) if package_path else None
+    pyproject_text = read_text(root / pyproject_path) if pyproject_path else ""
+    pyproject_meta = parse_pyproject_meta(pyproject_text) if pyproject_text else {}
     topics = unique([
         *(package_json.get("keywords", []) if isinstance(package_json, dict) and isinstance(package_json.get("keywords"), list) else []),
+        *(pyproject_meta.get("keywords") or []),
     ])
     return {
         "root": root,
@@ -170,7 +209,8 @@ def collect_facts(root: Path) -> dict[str, Any]:
         "package_path": package_path,
         "package_json": package_json,
         "pyproject_path": pyproject_path,
-        "pyproject_text": read_text(root / pyproject_path) if pyproject_path else "",
+        "pyproject_text": pyproject_text,
+        "pyproject_meta": pyproject_meta,
         "cargo_path": cargo_path,
         "cargo_text": read_text(root / cargo_path) if cargo_path else "",
         "go_mod_path": go_mod_path,
@@ -183,20 +223,27 @@ def collect_facts(root: Path) -> dict[str, Any]:
 
 def project_info(facts: dict[str, Any], root: Path) -> dict[str, Any]:
     package = facts["package_json"] if isinstance(facts["package_json"], dict) else {}
-    package_name = str(package.get("name") or "")
+    pyproject = facts.get("pyproject_meta") or {}
+    package_name = str(package.get("name") or pyproject.get("name") or "")
     readme_title = first_heading(facts["readme_text"])
     name = first_present([package_name, readme_title, root.name])
     description = trim_for_summary(first_present([
         package.get("description"),
+        pyproject.get("description"),
         opening_paragraph(facts["readme_text"]),
         f"{name} is an open source project.",
     ]))
+    repo_url = (
+        normalize_repository_url(package_repository_url(package))
+        or pyproject.get("repositoryUrl")
+        or None
+    )
     return {
         "name": name,
         "packageName": package_name or None,
         "description": description,
-        "repositoryUrl": normalize_repository_url(package_repository_url(package)) or None,
-        "homepage": package.get("homepage") or None,
+        "repositoryUrl": repo_url,
+        "homepage": package.get("homepage") or pyproject.get("homepage") or None,
         "installCommand": best_install_command(facts) or None,
         "topics": facts["topics"],
     }
@@ -373,7 +420,12 @@ def opening_paragraph(markdown: str) -> str:
     text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
     for block in re.split(r"\n\s*\n", text):
         clean = strip_markdown(block).strip()
-        if not clean or clean.startswith("#") or re.fullmatch(r"\[?!?\[?.*", clean):
+        if not clean:
+            continue
+        if clean.startswith("#"):
+            continue
+        # Skip lines that are purely badge/image/link patterns (e.g. [![badge](url)](link))
+        if re.match(r"^!?\[", clean) and "](" in clean:
             continue
         if len(clean) >= 20:
             return compact_snippet(clean, 300)
