@@ -12,7 +12,7 @@ from pathlib import Path
 
 from source2launch.ai import generate_ai_content, parse_json_content
 from source2launch.analyzer import analyze_target, parse_github_owner_repo
-from source2launch.image import build_image_prompt, fetch_readme_images, generate_platform_images
+from source2launch.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
 from source2launch.optimize import run_optimize
 from source2launch.promo_prompts import PROMPT_PRESETS, PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_user_prompt, expand_presets
 
@@ -341,6 +341,44 @@ class PythonCoreTest(unittest.TestCase):
         finally:
             server.stop()
 
+    def test_generate_openai_image_with_b64_response(self):
+        """GPT Image 2 synchronous API: POST → b64_json response → save file."""
+        import base64
+        png_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        )
+        server = MockOpenAIImageServer(png_bytes)
+        server.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out_path = Path(tmp) / "cover-xhs.png"
+                meta = generate_openai_image(
+                    "Test prompt for xhs",
+                    output_path=out_path,
+                    config={
+                        "apiKey": "test-key",
+                        "baseUrl": server.base_url,
+                        "model": "gpt-image-2",
+                        "quality": "medium",
+                        "timeoutMs": 10000,
+                    },
+                    platform="xhs",
+                )
+                self.assertTrue(out_path.exists())
+                self.assertEqual(out_path.read_bytes(), png_bytes)
+        finally:
+            server.stop()
+
+        self.assertEqual(meta["provider"], "openai")
+        self.assertEqual(meta["size"], "1024x1536")   # xhs portrait size
+
+    def test_openai_model_detection(self):
+        from source2launch.image import _is_openai_model
+        self.assertTrue(_is_openai_model("gpt-image-2"))
+        self.assertTrue(_is_openai_model("dall-e-3"))
+        self.assertFalse(_is_openai_model("Qwen/Qwen-Image"))
+        self.assertFalse(_is_openai_model("stabilityai/stable-diffusion"))
+
     def test_dotenv_loads_keys_not_already_in_environ(self):
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"
@@ -433,6 +471,47 @@ class MockChatServer:
     @property
     def last_request(self):
         return self.httpd.last_request
+
+    def start(self): self.thread.start()
+
+    def stop(self):
+        self.httpd.shutdown()
+        self.thread.join(timeout=5)
+        self.httpd.server_close()
+
+
+class MockOpenAIImageHandler(BaseHTTPRequestHandler):
+    """Simulates OpenAI Images API: POST → b64_json response (synchronous)."""
+
+    def do_POST(self):  # noqa: N802
+        import base64
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+        b64 = base64.b64encode(self.server.png_bytes).decode("ascii")
+        self._write_json({"created": 1, "data": [{"b64_json": b64}]})
+
+    def _write_json(self, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):  # noqa: A002
+        return
+
+
+class MockOpenAIImageServer:
+    def __init__(self, png_bytes: bytes):
+        self.httpd = HTTPServer(("127.0.0.1", 0), MockOpenAIImageHandler)
+        self.httpd.png_bytes = png_bytes
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    @property
+    def base_url(self):
+        host, port = self.httpd.server_address
+        return f"http://{host}:{port}/v1"
 
     def start(self): self.thread.start()
 

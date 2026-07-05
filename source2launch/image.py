@@ -2,12 +2,17 @@
 
 Two image sources:
 1. README visual URLs  — download existing screenshots from the project
-2. ModelScope AI       — generate a cover image from project evidence
+2. AI image model     — generate a cover image from project evidence
+   Supported providers:
+   - OpenAI  (gpt-image-2, dall-e-3): synchronous, returns base64 or URL
+   - ModelScope (Qwen/Qwen-Image):    async task + polling
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -18,19 +23,42 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Platform dimensions
 # ---------------------------------------------------------------------------
+
+# ModelScope uses pixel dimensions (width, height)
 PLATFORM_DIMS: dict[str, tuple[int, int]] = {
-    "xhs":        (1104, 1472),   # 3:4 vertical for Xiaohongshu
-    "xiaohongshu":(1104, 1472),
-    "wechat":     (1024, 1024),   # 1:1 square for WeChat
-    "zhihu":      (1280, 720),    # 16:9 banner
-    "twitter":    (1200, 628),    # Twitter card
-    "linkedin":   (1200, 628),
-    "default":    (1024, 1024),
+    "xhs":         (1104, 1472),   # 3:4 vertical for Xiaohongshu
+    "xiaohongshu": (1104, 1472),
+    "wechat":      (1024, 1024),   # 1:1 square for WeChat
+    "zhihu":       (1280, 720),    # 16:9 banner
+    "twitter":     (1200, 628),    # Twitter card
+    "linkedin":    (1200, 628),
+    "default":     (1024, 1024),
 }
 
+# OpenAI uses size strings (supported by gpt-image-2 and dall-e-3)
+OPENAI_IMAGE_SIZES: dict[str, str] = {
+    "xhs":         "1024x1536",   # portrait ~2:3
+    "xiaohongshu": "1024x1536",
+    "wechat":      "1024x1024",   # square
+    "zhihu":       "1536x1024",   # landscape
+    "twitter":     "1536x1024",
+    "linkedin":    "1536x1024",
+    "default":     "1024x1024",
+}
+
+DEFAULT_OPENAI_BASE  = "https://api.openai.com/v1"
 DEFAULT_MODELSCOPE_BASE = "https://api-inference.modelscope.cn/v1"
-DEFAULT_IMAGE_MODEL = "Qwen/Qwen-Image"
+DEFAULT_IMAGE_MODEL  = "Qwen/Qwen-Image"
 FETCH_TIMEOUT = 15
+
+
+# ---------------------------------------------------------------------------
+# Provider detection
+# ---------------------------------------------------------------------------
+
+def _is_openai_model(model: str) -> bool:
+    """Return True if the model should use the OpenAI synchronous Images API."""
+    return bool(re.search(r"gpt-image|dall-e|gpt-4o", model, re.I))
 
 
 # ---------------------------------------------------------------------------
@@ -41,26 +69,41 @@ def image_config(options: dict[str, Any] | None = None, env: dict[str, str] | No
     """Read image generation configuration from options and environment."""
     options = options or {}
     env = env or os.environ
-    api_key = (
-        options.get("api_key")
-        or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY")
-        or env.get("SOURCE2LAUNCH_API_KEY")
-        or env.get("MODELSCOPE_API_KEY")
-    )
-    base_url = (
-        options.get("base_url")
-        or env.get("SOURCE2LAUNCH_BASE_URL")
-        or DEFAULT_MODELSCOPE_BASE
-    ).rstrip("/")
+
     model = (
         options.get("model")
         or env.get("SOURCE2LAUNCH_IMAGE_MODEL")
         or DEFAULT_IMAGE_MODEL
     )
+
+    # API key: OpenAI models prefer OPENAI_API_KEY; ModelScope prefers MODELSCOPE key
+    if _is_openai_model(model):
+        api_key = (
+            options.get("api_key")
+            or env.get("OPENAI_API_KEY")
+            or env.get("SOURCE2LAUNCH_API_KEY")
+        )
+        default_base = DEFAULT_OPENAI_BASE
+    else:
+        api_key = (
+            options.get("api_key")
+            or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY")
+            or env.get("SOURCE2LAUNCH_API_KEY")
+            or env.get("MODELSCOPE_API_KEY")
+        )
+        default_base = DEFAULT_MODELSCOPE_BASE
+
+    base_url = (
+        options.get("base_url")
+        or env.get("SOURCE2LAUNCH_BASE_URL")
+        or default_base
+    ).rstrip("/")
+
     return {
         "apiKey": api_key,
         "baseUrl": base_url,
         "model": model,
+        "quality": options.get("quality") or env.get("SOURCE2LAUNCH_IMAGE_QUALITY") or "medium",
         "pollIntervalMs": int(options.get("poll_interval_ms") or env.get("SOURCE2LAUNCH_IMAGE_POLL_MS") or 4000),
         "timeoutMs": int(options.get("timeout_ms") or env.get("SOURCE2LAUNCH_IMAGE_TIMEOUT_MS") or 180_000),
     }
@@ -69,7 +112,8 @@ def image_config(options: dict[str, Any] | None = None, env: dict[str, str] | No
 def has_image_key(env: dict[str, str] | None = None) -> bool:
     env = env or os.environ
     return bool(
-        env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY")
+        env.get("OPENAI_API_KEY")
+        or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY")
         or env.get("SOURCE2LAUNCH_API_KEY")
         or env.get("MODELSCOPE_API_KEY")
     )
@@ -205,6 +249,86 @@ def generate_modelscope_image(
 
 
 # ---------------------------------------------------------------------------
+# OpenAI image generation (gpt-image-2, dall-e-3 — synchronous)
+# ---------------------------------------------------------------------------
+
+def generate_openai_image(
+    prompt: str,
+    *,
+    output_path: str | Path,
+    config: dict[str, Any],
+    platform: str = "default",
+) -> dict[str, Any]:
+    """Generate an image via OpenAI Images API (gpt-image-2, dall-e-3).
+
+    Synchronous — response contains base64 JSON or a URL directly.
+    """
+    api_key = config["apiKey"]
+    base_url = config["baseUrl"]
+    model = config["model"]
+    quality = config.get("quality", "medium")
+    size = OPENAI_IMAGE_SIZES.get(platform, OPENAI_IMAGE_SIZES["default"])
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # gpt-image-2 returns b64_json by default; url is also supported
+    body_dict: dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "size": size,
+        "n": 1,
+    }
+    # gpt-image-2 supports quality; dall-e-3 uses "hd"/"standard"
+    if re.search(r"gpt-image", model, re.I):
+        body_dict["quality"] = quality         # low / medium / high / auto
+        body_dict["output_format"] = "png"
+    else:
+        body_dict["quality"] = "hd" if quality in ("high", "hd") else "standard"
+        body_dict["response_format"] = "b64_json"
+
+    body = json.dumps(body_dict).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url}/images/generations",
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=config["timeoutMs"] / 1000) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"OpenAI Image API error {exc.code}: {detail}") from exc
+
+    items = data.get("data") or []
+    if not items:
+        raise RuntimeError(f"No image data in response: {data}")
+
+    item = items[0]
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    if item.get("b64_json"):
+        out.write_bytes(base64.b64decode(item["b64_json"]))
+    elif item.get("url"):
+        urllib.request.urlretrieve(item["url"], out)
+    else:
+        raise RuntimeError(f"Response item has neither b64_json nor url: {item}")
+
+    return {
+        "provider": "openai",
+        "model": model,
+        "outputPath": str(out),
+        "size": size,
+        "quality": quality,
+        "platform": platform,
+    }
+
+
+# ---------------------------------------------------------------------------
 # README image extraction
 # ---------------------------------------------------------------------------
 
@@ -273,15 +397,24 @@ def generate_platform_images(
         return generated
 
     cfg = image_config(options, effective_env)
+    use_openai = _is_openai_model(cfg["model"])
+    provider_label = "openai" if use_openai else "modelscope"
+    print(f"source2launch: image provider → {provider_label} ({cfg['model']})", file=sys.stderr)
 
     platforms_to_generate = [("xhs", "xhs"), ("wechat", "wechat")]
     for platform, filename_hint in platforms_to_generate:
         try:
             prompt = build_image_prompt(result, platform=platform)
-            out_path = images_dir / f"cover-{filename_hint}.jpg"
-            print(f"source2launch: generating AI image for {platform}…", file=sys.stderr)
-            meta = generate_modelscope_image(prompt, output_path=out_path, config=cfg)
-            meta["platform"] = platform
+            ext = "png" if use_openai else "jpg"
+            out_path = images_dir / f"cover-{filename_hint}.{ext}"
+            print(f"source2launch: generating image for {platform}…", file=sys.stderr)
+
+            if use_openai:
+                meta = generate_openai_image(prompt, output_path=out_path, config=cfg, platform=platform)
+            else:
+                meta = generate_modelscope_image(prompt, output_path=out_path, config=cfg)
+                meta["platform"] = platform
+
             generated.append(meta)
             print(f"source2launch: image saved → {out_path.name}", file=sys.stderr)
         except Exception as exc:  # noqa: BLE001
