@@ -21,30 +21,50 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Platform dimensions
+# Platform dimensions — derived from format, configurable via env
 # ---------------------------------------------------------------------------
 
-# ModelScope uses pixel dimensions (width, height)
-PLATFORM_DIMS: dict[str, tuple[int, int]] = {
-    "xhs":         (1104, 1472),   # 3:4 vertical for Xiaohongshu
-    "xiaohongshu": (1104, 1472),
-    "wechat":      (1024, 1024),   # 1:1 square for WeChat
-    "zhihu":       (1280, 720),    # 16:9 banner
-    "twitter":     (1200, 628),    # Twitter card
-    "linkedin":    (1200, 628),
-    "default":     (1024, 1024),
+# Format → (width, height) for ModelScope
+_FORMAT_DIMS = {
+    "portrait":  (1024, 1536),
+    "square":    (1024, 1024),
+    "landscape": (1536, 1024),
 }
 
-# OpenAI uses size strings (supported by gpt-image-2 and dall-e-3)
-OPENAI_IMAGE_SIZES: dict[str, str] = {
-    "xhs":         "1024x1536",   # portrait ~2:3
-    "xiaohongshu": "1024x1536",
-    "wechat":      "1024x1024",   # square
-    "zhihu":       "1536x1024",   # landscape
-    "twitter":     "1536x1024",
-    "linkedin":    "1536x1024",
-    "default":     "1024x1024",
+# Format → size string for OpenAI
+_FORMAT_OPENAI_SIZES = {
+    "portrait":  "1024x1536",
+    "square":    "1024x1024",
+    "landscape": "1536x1024",
 }
+
+
+def _platform_format(platform: str, env: dict[str, str] | None = None) -> str:
+    """Determine image format (portrait/square/landscape) from platform name.
+
+    Configurable: SOURCE2LAUNCH_IMAGE_FORMAT=portrait overrides per-platform logic.
+    """
+    env = env or os.environ
+    override = env.get("SOURCE2LAUNCH_IMAGE_FORMAT", "").lower().strip()
+    if override in _FORMAT_DIMS:
+        return override
+
+    p = platform.lower()
+    if any(k in p for k in ("xhs", "xiaohongshu", "red", "vertical")):
+        return "portrait"
+    if any(k in p for k in ("wechat", "moments", "weixin", "square")):
+        return "square"
+    return "landscape"   # default for Twitter, LinkedIn, zhihu, etc.
+
+
+def _platform_dims(platform: str, env: dict[str, str] | None = None) -> tuple[int, int]:
+    fmt = _platform_format(platform, env)
+    return _FORMAT_DIMS.get(fmt, (1024, 1024))
+
+
+def _platform_openai_size(platform: str, env: dict[str, str] | None = None) -> str:
+    fmt = _platform_format(platform, env)
+    return _FORMAT_OPENAI_SIZES.get(fmt, "1024x1024")
 
 DEFAULT_OPENAI_BASE  = "https://api.openai.com/v1"
 DEFAULT_MODELSCOPE_BASE = "https://api-inference.modelscope.cn/v1"
@@ -177,13 +197,9 @@ def generate_modelscope_image(
         "Content-Type": "application/json",
     }
 
-    # Determine dimensions from output filename hint or default
-    width, height = PLATFORM_DIMS["default"]
-    out_str = str(output_path).lower()
-    for platform, dims in PLATFORM_DIMS.items():
-        if platform in out_str:
-            width, height = dims
-            break
+    # Derive dimensions from output filename (platform hint)
+    out_stem = Path(output_path).stem.lower()
+    width, height = _platform_dims(out_stem)
 
     # Submit task
     body = json.dumps({
@@ -267,7 +283,7 @@ def generate_openai_image(
     base_url = config["baseUrl"]
     model = config["model"]
     quality = config.get("quality", "medium")
-    size = OPENAI_IMAGE_SIZES.get(platform, OPENAI_IMAGE_SIZES["default"])
+    size = _platform_openai_size(platform)
 
     headers = {
         "Authorization": f"Bearer {api_key}",

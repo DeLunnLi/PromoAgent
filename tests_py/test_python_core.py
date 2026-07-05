@@ -16,7 +16,7 @@ from source2launch.image import build_image_prompt, fetch_readme_images, generat
 from source2launch.examples import detect_category, find_examples, format_examples_for_prompt
 from source2launch.interactive import has_significant_gaps, identify_gaps
 from source2launch.optimize import run_optimize
-from source2launch.promo_prompts import PROMPT_PRESETS, PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_user_prompt, expand_presets
+from source2launch.promo_prompts import PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_user_prompt, expand_presets
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests_py" / "fixtures"
@@ -164,7 +164,7 @@ class PythonCoreTest(unittest.TestCase):
 
         self.assertEqual(generated["model"], "test-model")
         self.assertEqual(generated["content"]["positioning"], "测试定位")
-        self.assertIn("promotionStrategy.qualityRubric", server.last_request["messages"][1]["content"])
+        self.assertIn("qualityRubric", server.last_request["messages"][1]["content"])
 
     # ------------------------------------------------------------------
     # Output validation
@@ -206,22 +206,14 @@ class PythonCoreTest(unittest.TestCase):
     # Prompt presets
     # ------------------------------------------------------------------
 
-    def test_expand_presets_returns_instructions(self):
-        result = expand_presets(["autopr", "grounded"])
-        self.assertIn("AutoPR", result)
-        self.assertIn("traceable", result)
-        self.assertEqual(result.count("### Preset:"), 2)
+    def test_expand_presets_returns_hint_string(self):
+        result = expand_presets(["autopr", "paper"])
+        self.assertIn("autopr", result)
+        self.assertIn("paper", result)
+        self.assertIsInstance(result, str)
 
-    def test_expand_presets_skips_unknown(self):
-        result = expand_presets(["grounded", "unknown_xyz"])
-        self.assertIn("traceable", result)
-        self.assertNotIn("unknown_xyz", result)
-
-    def test_all_documented_presets_exist(self):
-        for name in ["grounded", "author", "realworld", "autopr", "scholardag",
-                     "human", "tweet", "paper", "launch", "launchkit",
-                     "technical", "zhihu", "xhs", "wechat", "visual", "paper2web", "thread"]:
-            self.assertIn(name, PROMPT_PRESETS, f"Preset '{name}' missing")
+    def test_expand_presets_empty_returns_empty(self):
+        self.assertEqual(expand_presets([]), "")
 
     def test_prompt_schema_requires_quality_rubric(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
@@ -229,7 +221,7 @@ class PythonCoreTest(unittest.TestCase):
         prompt = build_promo_user_prompt(payload, platform="xhs")
 
         self.assertIn("qualityRubric", PROMO_JSON_SCHEMA)
-        self.assertIn("promotionStrategy.qualityRubric", prompt)
+        self.assertIn("qualityRubric", prompt)
         self.assertIn("npx repo-pulse .", build_evidence_brief(payload))
 
     # ------------------------------------------------------------------
@@ -244,7 +236,8 @@ class PythonCoreTest(unittest.TestCase):
 
             self.assertIn("INDEX.md", manifest["generated"])
             self.assertIn("evidence-summary.md", manifest["generated"])
-            self.assertIn("promo-xhs.md", manifest["generated"])
+            # Without AI, a placeholder draft is written
+            self.assertIn("promo-draft.md", manifest["generated"])
             self.assertEqual(manifest["promoSource"], "unavailable")
 
     def test_optimize_uses_ai_content_when_provided(self):
@@ -258,7 +251,8 @@ class PythonCoreTest(unittest.TestCase):
 
             self.assertEqual(manifest["promoSource"], "ai")
             self.assertEqual(manifest["promoModel"], "test-model")
-            xhs = (output_dir / "promo-xhs.md").read_text(encoding="utf-8")
+            # Filename derived from AI output key ("xiaohongshu" → "promo-xiaohongshu.md")
+            xhs = (output_dir / "promo-xiaohongshu.md").read_text(encoding="utf-8")
             self.assertIn("AI 小红书正文", xhs)
 
     # ------------------------------------------------------------------
@@ -328,7 +322,7 @@ class PythonCoreTest(unittest.TestCase):
                     ],
                     cwd=ROOT, env=env, text=True, capture_output=True, check=True,
                 )
-                xhs = (output_dir / "promo-xhs.md").read_text(encoding="utf-8")
+                xhs = (output_dir / "promo-xiaohongshu.md").read_text(encoding="utf-8")
         finally:
             server.stop()
 

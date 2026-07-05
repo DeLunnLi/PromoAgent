@@ -95,18 +95,11 @@ def detect_category(result: dict[str, Any], ai_options: dict[str, Any] | None = 
 # ---------------------------------------------------------------------------
 
 def _build_search_query(category: str, platform: str) -> str:
-    platform_hints = {
-        "xhs": f"小红书 {category} 推广文案 真实案例",
-        "xiaohongshu": f"小红书 {category} 笔记 范例",
-        "zhihu": f"知乎 {category} 推荐 优质回答",
-        "wechat": f"微信公众号 {category} 推文 优质案例",
-        "twitter": f"Twitter {category} promotional post example",
-        "showHn": f"Show HN {category} post example Hacker News",
-        "productHunt": f"Product Hunt {category} launch tagline example",
-        "linkedin": f"LinkedIn {category} post professional example",
-        "all": f"{category} 多平台推广文案 优质示例",
-    }
-    return platform_hints.get(platform, f"{category} 推广文案 优质示例")
+    """Build a search query for finding promotional examples."""
+    label = _platform_label(platform)
+    if platform in ("all", "", "通用"):
+        return f"{category} 推广文案 优质示例"
+    return f"{label} {category} 推广 优质案例 示例"
 
 
 # ---------------------------------------------------------------------------
@@ -172,17 +165,9 @@ _EXAMPLE_GENERATION_PROMPT = """\
 只输出两个示例，用 === 分隔，不要其他解释。
 """
 
-_PLATFORM_LABELS = {
-    "xhs": "小红书",
-    "xiaohongshu": "小红书",
-    "zhihu": "知乎",
-    "wechat": "微信（朋友圈 + 公众号）",
-    "twitter": "Twitter / X",
-    "showHn": "Hacker News Show HN",
-    "productHunt": "Product Hunt",
-    "linkedin": "LinkedIn",
-    "all": "通用多平台",
-}
+def _platform_label(platform: str) -> str:
+    """Derive a human-readable label from the platform key."""
+    return platform if platform else "通用"
 
 
 def _generate_examples_via_ai(
@@ -199,7 +184,7 @@ def _generate_examples_via_ai(
     if not config.get("apiKey"):
         return []
 
-    platform_label = _PLATFORM_LABELS.get(platform, platform)
+    platform_label = _platform_label(platform)
     prompt = _EXAMPLE_GENERATION_PROMPT.format(
         category=category,
         platform_label=platform_label,
@@ -292,7 +277,7 @@ def format_examples_for_prompt(examples: list[str], platform: str = "all") -> st
     if not examples:
         return ""
 
-    platform_label = _PLATFORM_LABELS.get(platform, platform)
+    platform_label = _platform_label(platform)
     lines = [
         f"## 参考示例（{platform_label} 优质内容风格参考）",
         "",

@@ -308,16 +308,11 @@ def _format_ai_output(result: dict[str, Any], content: dict[str, Any]) -> str:
     if strategy.get("coreAngle"):
         lines += ["## Strategy", "", strategy["coreAngle"], ""]
 
+    # Render whatever platforms the AI returned — no hardcoded list
     promotions = content.get("promotions") or {}
-    platform_labels = {
-        "xiaohongshu": "小红书", "zhihu": "知乎", "wechatMoments": "微信",
-        "showHn": "Show HN", "productHunt": "Product Hunt",
-        "twitter": "Twitter / X", "linkedin": "LinkedIn", "reddit": "Reddit",
-    }
-    for key, label in platform_labels.items():
-        item = promotions.get(key)
+    for key, item in promotions.items():
         if isinstance(item, dict) and item.get("markdown"):
-            lines += [f"## {label}", "", str(item["markdown"]).strip(), ""]
+            lines += [f"## {key}", "", str(item["markdown"]).strip(), ""]
 
     if len(lines) <= 4:
         lines.append(json.dumps(content, ensure_ascii=False, indent=2))
