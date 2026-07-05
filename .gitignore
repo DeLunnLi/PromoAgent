@@ -15,3 +15,8 @@ promo-image.jpg
 *.generated.jpg
 .cursor/
 .cursor*
+
+# Runtime files that should never be committed
+.s2l-session.json
+*.s2l-session
+.s2l-cache/
