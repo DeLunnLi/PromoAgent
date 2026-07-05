@@ -20,6 +20,9 @@ keywords = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+web = ["gradio>=4.0"]
+
 [project.scripts]
 source2launch = "source2launch.cli:main"
 source2launch-py = "source2launch.cli:main"

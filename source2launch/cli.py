@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_optimize(args)
         if args.command == "refine":
             return _run_refine(args)
+        if args.command == "serve":
+            return _run_serve(args)
         return _run_analyze(args)
     except Exception as error:  # noqa: BLE001
         print(f"source2launch: {error}", file=sys.stderr)
@@ -78,6 +80,12 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Override image model ID (default: from SOURCE2LAUNCH_IMAGE_MODEL or Qwen/Qwen-Image).")
     _add_ai_options(optimize)
     _add_context_options(optimize)
+
+    # serve
+    serve = sub.add_parser("serve", help="Launch the web interface in a browser.")
+    serve.add_argument("--host", default="127.0.0.1", help="Host to bind (default: 127.0.0.1).")
+    serve.add_argument("--port", type=int, default=7860, help="Port to listen on (default: 7860).")
+    serve.add_argument("--share", action="store_true", help="Create a public Gradio share link.")
 
     # refine
     refine = sub.add_parser("refine", help="Refine previously generated content with feedback.")
@@ -333,6 +341,20 @@ def _format_ai_output(result: dict[str, Any], content: dict[str, Any]) -> str:
     if len(lines) <= 4:
         lines.append(json.dumps(content, ensure_ascii=False, indent=2))
     return "\n".join(lines).rstrip()
+
+
+def _run_serve(args: argparse.Namespace) -> int:
+    try:
+        from .web import launch
+    except ImportError:
+        print(
+            "source2launch: Gradio is required for the web interface.\n"
+            "Install it with:  pip install gradio",
+            file=sys.stderr,
+        )
+        return 1
+    launch(host=args.host, port=args.port, share=args.share)
+    return 0
 
 
 def _run_refine(args: argparse.Namespace) -> int:
