@@ -20,3 +20,4 @@ promo-image.jpg
 .s2l-session.json
 *.s2l-session
 .s2l-cache/
+.s2l-browser/

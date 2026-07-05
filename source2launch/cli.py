@@ -31,6 +31,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_serve(args)
         if args.command == "publish":
             return _run_publish_cmd(args)
+        if args.command == "fill":
+            return _run_fill(args)
         return _run_analyze(args)
     except Exception as error:  # noqa: BLE001
         print(f"source2launch: {error}", file=sys.stderr)
@@ -83,6 +85,17 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_ai_options(optimize)
     _add_context_options(optimize)
 
+    # fill — browser-assisted filling
+    fill_p = sub.add_parser("fill",
+                            help="Open a browser, auto-fill content, let user click Publish.")
+    fill_p.add_argument("platform",
+                        help="Platform: xhs, zhihu, wechat, twitter, linkedin")
+    fill_p.add_argument("--content", help="Content to fill (overrides reading from --assets-dir).")
+    fill_p.add_argument("--assets-dir", default="launch-assets",
+                        help="Directory with generated promo files (default: launch-assets).")
+    fill_p.add_argument("--title", default="", help="Post title (overrides auto-extracted).")
+    fill_p.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
+
     # publish
     publish_p = sub.add_parser("publish", help="Publish generated content to social platforms.")
     publish_p.add_argument("platform", nargs="?", default=None,
@@ -118,7 +131,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _normalize_argv(argv: list[str]) -> list[str]:
     if not argv:
         return ["analyze", "."]
-    commands = {"analyze", "promote", "optimize"}
+    commands = {"analyze", "promote", "optimize", "fill", "publish", "serve", "refine"}
     if argv[0] in commands or argv[0] in {"-h", "--help", "--version"}:
         return argv
     return ["analyze", *argv]
@@ -357,6 +370,29 @@ def _format_ai_output(result: dict[str, Any], content: dict[str, Any]) -> str:
     if len(lines) <= 4:
         lines.append(json.dumps(content, ensure_ascii=False, indent=2))
     return "\n".join(lines).rstrip()
+
+
+def _run_fill(args: argparse.Namespace) -> int:
+    from .browser import fill_platform, list_supported_platforms
+    from .publish import load_content_from_assets
+
+    platform = args.platform.lower().strip()
+
+    # Load content
+    try:
+        content = args.content or load_content_from_assets(args.assets_dir, platform)
+    except FileNotFoundError as exc:
+        print(f"source2launch: {exc}", file=sys.stderr)
+        print("Tip: Run `source2launch optimize --ai` first to generate content.", file=sys.stderr)
+        return 1
+
+    fill_platform(
+        platform,
+        content,
+        title=getattr(args, "title", ""),
+        headless=getattr(args, "headless", False),
+    )
+    return 0
 
 
 def _run_publish_cmd(args: argparse.Namespace) -> int:

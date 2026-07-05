@@ -21,7 +21,8 @@ keywords = [
 dependencies = []
 
 [project.optional-dependencies]
-web = ["gradio>=4.0"]
+web    = ["gradio>=4.0"]
+fill   = ["playwright>=1.40"]
 
 [project.scripts]
 source2launch = "source2launch.cli:main"
