@@ -47,6 +47,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_target(promote)
     promote.add_argument("--platform", default="all", help="Target platform(s): xhs, zhihu, wechat, launch, all.")
     promote.add_argument("--ai", action="store_true", help="Call the configured AI model to generate copy.")
+    promote.add_argument("--interactive", "-i", action="store_true",
+                         help="Ask clarifying questions before generating (auto-enabled when info is thin).")
     promote.add_argument("--json", action="store_true", help="Print JSON output.")
     promote.add_argument("-o", "--output", help="Write output to a file.")
     _add_ai_options(promote)
@@ -58,6 +60,8 @@ def _build_parser() -> argparse.ArgumentParser:
     optimize.add_argument("--output", "--output-dir", dest="output_dir", default="launch-assets",
                           help="Output directory (default: launch-assets).")
     optimize.add_argument("--ai", action="store_true", help="Call the configured AI model to generate copy.")
+    optimize.add_argument("--interactive", "-i", action="store_true",
+                         help="Ask clarifying questions before generating.")
     optimize.add_argument("--image", action="store_true",
                           help="Also generate cover images (README screenshots + AI cover). "
                                "Requires SOURCE2LAUNCH_MODELSCOPE_API_KEY for AI images.")
@@ -80,7 +84,10 @@ def _normalize_argv(argv: list[str]) -> list[str]:
 
 def _add_target(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("target", nargs="?", default=".",
-                        help="Local path, GitHub URL, or PDF file.")
+                        help=(
+                            "What to promote: local path, GitHub URL, PDF file, "
+                            "or a free-text description (e.g. \"上海火锅店，麻辣鲜香，人均80元\")."
+                        ))
 
 
 def _add_ai_options(parser: argparse.ArgumentParser) -> None:
@@ -114,7 +121,12 @@ def _run_analyze(args: argparse.Namespace) -> int:
 
 
 def _run_promote(args: argparse.Namespace) -> int:
+    from .interactive import ask_and_merge, has_significant_gaps
     result = analyze_target(args.target)
+    # Interactive Q&A: run when --interactive is set OR when info is thin and we're in a TTY
+    force_interactive = getattr(args, "interactive", False)
+    if force_interactive or (not getattr(args, "json", False) and has_significant_gaps(result)):
+        result = ask_and_merge(result, force=force_interactive)
     payload = build_promo_payload(result)
     platform = args.platform
     brief = _build_brief(args)
@@ -155,7 +167,11 @@ def _run_promote(args: argparse.Namespace) -> int:
 
 
 def _run_optimize(args: argparse.Namespace) -> int:
+    from .interactive import ask_and_merge, has_significant_gaps
     result = analyze_target(args.target)
+    force_interactive = getattr(args, "interactive", False)
+    if force_interactive or has_significant_gaps(result):
+        result = ask_and_merge(result, force=force_interactive)
     ai_result = _call_ai(result, platform="all", brief=_build_brief(args), args=args) if args.ai else None
     image_options = {"model": getattr(args, "image_model", None)} if getattr(args, "image", False) else None
     manifest = run_optimize(

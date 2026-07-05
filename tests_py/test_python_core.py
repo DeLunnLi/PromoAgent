@@ -11,8 +11,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from source2launch.ai import generate_ai_content, parse_json_content
-from source2launch.analyzer import analyze_target, parse_github_owner_repo
+from source2launch.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
 from source2launch.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
+from source2launch.interactive import has_significant_gaps, identify_gaps
 from source2launch.optimize import run_optimize
 from source2launch.promo_prompts import PROMPT_PRESETS, PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_user_prompt, expand_presets
 
@@ -33,6 +34,52 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(result["project"]["installCommand"], "npx repo-pulse .")
         self.assertEqual(result["repository"]["readme"], "README.md")
         self.assertTrue(result["evidence"]["visuals"])
+
+    # ------------------------------------------------------------------
+    # Free-text input (general promotion agent)
+    # ------------------------------------------------------------------
+
+    def test_analyze_free_text_restaurant(self):
+        result = analyze_free_text("上海阿强火锅，主打麻辣鲜香，人均80元，位于静安区南京西路")
+        self.assertEqual(result["source"], "text")
+        self.assertEqual(result["inputType"], "text")
+        self.assertIn("阿强火锅", result["project"]["name"])
+        self.assertIn("麻辣", result["project"]["description"])
+        self.assertEqual(result["evidence"]["opening"], result["project"]["description"])
+        self.assertTrue(result["evidence"]["launchRisks"])
+
+    def test_analyze_free_text_software(self):
+        result = analyze_free_text("Source2Launch: a CLI tool that reads GitHub repos and generates social media content")
+        self.assertEqual(result["source"], "text")
+        self.assertIn("Source2Launch", result["project"]["name"])
+
+    def test_analyze_target_routes_free_text(self):
+        result = analyze_target("一款专为开发者设计的代码审查 AI 工具，每次 PR 自动生成评审报告")
+        self.assertEqual(result["source"], "text")
+        self.assertEqual(result["inputType"], "text")
+
+    def test_evidence_brief_handles_free_text_result(self):
+        result = analyze_free_text("上海阿强火锅，麻辣鲜香，人均80，静安区")
+        payload = {"project": result["project"], "evidence": result["evidence"]}
+        brief = build_evidence_brief(payload)
+        self.assertIn("上海阿强火锅", brief)
+        self.assertIn("推广主体", brief)
+        self.assertIn("核心描述", brief)
+
+    def test_identify_gaps_for_thin_text_input(self):
+        result = analyze_free_text("火锅店")  # very thin
+        gaps = identify_gaps(result)
+        self.assertIn("description", gaps)   # description is too short
+        self.assertIn("cta", gaps)           # no CTA
+        self.assertTrue(len(gaps) <= 3)
+
+    def test_has_significant_gaps_for_repo(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        # Repo with README, install command, visuals — should not have significant gaps
+        # (or at least cta and description are filled)
+        gaps = identify_gaps(result)
+        # Install command fills cta, description from README fills description
+        self.assertNotIn("cta", gaps)
 
     def test_analyzes_markdown_file_target(self):
         with tempfile.TemporaryDirectory() as tmp:

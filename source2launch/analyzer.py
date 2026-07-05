@@ -13,18 +13,76 @@ VERSION = "0.2.0"
 
 
 def analyze_target(input_value: str = ".", *, cwd: str | os.PathLike[str] | None = None) -> dict[str, Any]:
-    """Analyze a local repository and return Source2Launch-compatible evidence."""
+    """Analyze any source and return promotion-compatible evidence.
 
+    Accepts:
+    - Local directory path (repo analysis)
+    - Local file path (PDF / Markdown)
+    - HTTP/HTTPS URL (GitHub fetch or placeholder)
+    - Free-text description (anything else, e.g. "上海火锅店，麻辣鲜香")
+    """
     raw_input = str(input_value or ".").strip()
+
     if is_remote_url(raw_input):
         return analyze_url_reference(raw_input)
 
     root = Path(cwd or os.getcwd()).joinpath(raw_input).resolve()
     if root.is_file():
         return analyze_document_path(root)
-    if not root.is_dir():
-        raise ValueError(f"Target is not a local directory or readable file: {input_value}")
-    return analyze_repository_path(root)
+    if root.is_dir():
+        return analyze_repository_path(root)
+
+    # Not a URL, not a file, not a directory → treat as free-text description
+    if len(raw_input) > 3:
+        return analyze_free_text(raw_input)
+
+    raise ValueError(f"Target is not a URL, file, directory, or description: {input_value!r}")
+
+
+def analyze_free_text(description: str) -> dict[str, Any]:
+    """Analyze a plain-text description of anything to promote.
+
+    Works for restaurants, products, events, open-source projects—any subject.
+    """
+    name = _extract_name_hint(description)
+    return {
+        "version": VERSION,
+        "target": description[:60] + ("…" if len(description) > 60 else ""),
+        "source": "text",
+        "inputType": "text",
+        "project": {
+            "name": name,
+            "description": description,
+            "cta": None,           # call-to-action (phone / link / install command)
+            "repositoryUrl": None,
+            "homepage": None,
+            "topics": [],
+        },
+        "evidence": {
+            "opening": description,
+            "firstScreen": description,
+            "headings": [],
+            "keyActions": [],      # replaces installCommands for generic use
+            "visuals": [],
+            "visualUrls": [],
+            "launchRisks": [
+                {"id": "text-only", "message": "只提供了文字描述。补充图片、网址或更多细节可以显著提升推广质量。"}
+            ],
+            "proofPoints": [],     # testimonials, awards, stats, press coverage
+            "additionalContext": {},  # location, price, hours, audience, etc.
+        },
+    }
+
+
+def _extract_name_hint(description: str) -> str:
+    """Heuristically extract a short name from a free-text description."""
+    # Try quoted text first: "阿强火锅" or 'Product Name'
+    m = re.search(r'[「『"\']([\w\s·\-]+)[」』"\']', description)
+    if m:
+        return m.group(1).strip()[:40]
+    # First clause before common separators
+    first = re.split(r'[，,。.！!？?、\n]', description.strip())[0].strip()
+    return first[:40] if first else description[:20]
 
 
 def analyze_url_reference(
@@ -251,19 +309,28 @@ def project_info(facts: dict[str, Any], root: Path) -> dict[str, Any]:
 
 def evidence_info(facts: dict[str, Any]) -> dict[str, Any]:
     readme = facts["readme_text"]
+    opening = opening_paragraph(readme)
+    cmds = install_commands(readme)[:5]
     return {
-        "readmeOpening": opening_paragraph(readme),
+        # Legacy fields (kept for backward compatibility)
+        "readmeOpening": opening,
         "readmeFirstScreen": compact_snippet(readme[:1800], 1800) if readme else "",
-        "headings": readme_headings(readme)[:16],
-        "installCommands": install_commands(readme)[:5],
-        "visuals": visual_references(readme)[:5],
-        "visualUrls": extract_image_urls(readme)[:3],
-        "launchRisks": launch_risks(facts),
+        "installCommands": cmds,
         "packageScripts": package_scripts(facts["package_json"]),
         "examplePaths": [
             file for file in facts["files"]
             if re.search(r"^(examples?|samples?|demos?|playground|templates)/", normalize_path(file), re.I)
         ][:12],
+        # Universal fields (used by generic evidence brief)
+        "opening": opening,
+        "firstScreen": compact_snippet(readme[:1800], 1800) if readme else "",
+        "headings": readme_headings(readme)[:16],
+        "keyActions": cmds,        # e.g. install commands or CTAs
+        "visuals": visual_references(readme)[:5],
+        "visualUrls": extract_image_urls(readme)[:3],
+        "launchRisks": launch_risks(facts),
+        "proofPoints": [],         # populated via interactive Q&A or future extractors
+        "additionalContext": {},   # populated via interactive Q&A
     }
 
 
