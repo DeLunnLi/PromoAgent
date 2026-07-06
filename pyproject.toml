@@ -3,34 +3,44 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "source2launch"
-version = "0.2.0"
-description = "Generate source-grounded launch content for open-source projects and papers."
+name = "promoagent"
+version = "0.3.0"
+description = "AI Promotion Agent for Launches, Ads, and Multi-Platform Copy"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "DeLunnLi" }]
 keywords = [
   "ai",
-  "open-source",
-  "paper",
-  "launch",
   "promotion",
+  "marketing",
+  "launch",
+  "copywriting",
+  "social-media",
+  "agent",
   "cli"
 ]
-dependencies = []
+dependencies = ["rich>=13.0"]
 
 [project.optional-dependencies]
 web    = ["gradio>=4.0"]
 fill   = ["playwright>=1.40"]
+mcp    = ["mcp>=1.0"]
+pdf    = ["pypdf>=4.0"]
+ocr    = ["pypdf>=4.0", "pypdfium2>=4.0", "Pillow>=9.0", "pytesseract>=0.3"]
 
 [project.scripts]
-source2launch = "source2launch.cli:main"
-source2launch-py = "source2launch.cli:main"
+promoagent     = "promoagent.cli:main"
+promoagent-py  = "promoagent.cli:main"
+promoagent-mcp = "promoagent.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/DeLunnLi/PromoAgent"
+Repository = "https://github.com/DeLunnLi/PromoAgent"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["source2launch*"]
+include = ["promoagent*"]
 
-[tool.source2launch]
+[tool.promoagent]
 python_migration = true

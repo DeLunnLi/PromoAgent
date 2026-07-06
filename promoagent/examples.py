@@ -5,9 +5,11 @@ Stage 1 (this module): find 1-2 high-quality reference examples for the
 Stage 2 (ai.py):       use those examples as few-shot context when generating
                         the actual promotional content.
 
-Two example sources, tried in order:
-  1. Tavily web search  — real examples from the web (requires TAVILY_API_KEY)
-  2. AI self-generation — the AI generates reference examples from its training
+Three example sources, tried in order:
+  1. Tavily web search  — keyword search, real examples (requires TAVILY_API_KEY)
+  2. Exa neural search  — semantic search, better for English/PH/Show HN content
+                          (requires EXA_API_KEY)
+  3. AI self-generation — the AI generates reference examples from its training
                           knowledge (zero external dependencies)
 """
 from __future__ import annotations
@@ -18,9 +20,11 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+EXA_SEARCH_URL    = "https://api.exa.ai/search"
 FETCH_TIMEOUT = 15
 
 # ---------------------------------------------------------------------------
@@ -49,7 +53,7 @@ def detect_category(result: dict[str, Any], ai_options: dict[str, Any] | None = 
     # Fast heuristic: if no AI key, use source type
     env = env or os.environ
     has_key = bool(
-        env.get("SOURCE2LAUNCH_API_KEY") or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY")
+        env.get("PROMOAGENT_API_KEY") or env.get("PROMOAGENT_MODELSCOPE_API_KEY")
         or env.get("OPENAI_API_KEY") or env.get("MODELSCOPE_API_KEY")
     )
     if not has_key:
@@ -80,7 +84,7 @@ def detect_category(result: dict[str, Any], ai_options: dict[str, Any] | None = 
             timeout=10,
         )
         return extract_chat_content(resp).strip()[:30]
-    except Exception:  # noqa: BLE001
+    except (RuntimeError, urllib.error.URLError, json.JSONDecodeError, KeyError, ValueError):
         # AI failed → fall back to source-type heuristic
         source = result.get("source", "")
         if source in ("github", "local"):
@@ -132,7 +136,7 @@ def _search_tavily(query: str, api_key: str, max_results: int = 3) -> list[str]:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
             data = json.loads(resp.read())
     except (urllib.error.HTTPError, urllib.error.URLError, Exception) as exc:  # noqa: BLE001
-        print(f"source2launch: Tavily search failed: {exc}", file=sys.stderr)
+        print(f"promoagent: Tavily search failed: {exc}", file=sys.stderr)
         return []
 
     snippets = []
@@ -145,7 +149,59 @@ def _search_tavily(query: str, api_key: str, max_results: int = 3) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Source 2: AI self-generation (zero external dependencies)
+# Source 2: Exa neural / semantic search
+# ---------------------------------------------------------------------------
+
+def _has_exa_key(env: dict[str, str] | None = None) -> bool:
+    env = env or os.environ
+    return bool(env.get("EXA_API_KEY"))
+
+
+def _search_exa(query: str, api_key: str, max_results: int = 3) -> list[str]:
+    """Call Exa neural search API and return a list of content snippets.
+
+    Exa uses semantic / neural search rather than keyword matching, which
+    surfaces posts that are conceptually similar even when wording differs.
+    Particularly effective for English-language platforms (Show HN, Product
+    Hunt, LinkedIn, Reddit) and for academic content.
+    """
+    body = json.dumps({
+        "query": query,
+        "numResults": max_results,
+        "type": "neural",
+        "useAutoprompt": True,
+        "contents": {
+            "text": {"maxCharacters": 500},
+        },
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        EXA_SEARCH_URL,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+    except (urllib.error.HTTPError, urllib.error.URLError, Exception) as exc:  # noqa: BLE001
+        print(f"promoagent: Exa search failed: {exc}", file=sys.stderr)
+        return []
+
+    snippets = []
+    for item in (data.get("results") or []):
+        text = (item.get("text") or "").strip()
+        title = (item.get("title") or "").strip()
+        if text:
+            snippets.append(f"【{title}】\n{text[:500]}" if title else text[:500])
+    return snippets[:2]
+
+
+# ---------------------------------------------------------------------------
+# Source 3: AI self-generation (zero external dependencies)
 # ---------------------------------------------------------------------------
 
 _EXAMPLE_GENERATION_PROMPT = """\
@@ -205,8 +261,8 @@ def _generate_examples_via_ai(
             headers=headers,
             timeout=config["timeout"],
         )
-    except Exception as exc:  # noqa: BLE001
-        print(f"source2launch: example generation failed: {exc}", file=sys.stderr)
+    except (RuntimeError, urllib.error.URLError, json.JSONDecodeError, KeyError, ValueError) as exc:
+        print(f"promoagent: example generation failed: {exc}", file=sys.stderr)
         return []
 
     choices = response.get("choices") or []
@@ -218,6 +274,50 @@ def _generate_examples_via_ai(
     parts = re.split(r"\n===+\n?|\n---+\n?", content.strip())
     examples = [p.strip() for p in parts if len(p.strip()) > 30]
     return examples[:2]
+
+
+# ---------------------------------------------------------------------------
+# Parallel search helper
+# ---------------------------------------------------------------------------
+
+def _search_parallel(query: str, env: dict[str, str]) -> list[str]:
+    """Search Tavily and Exa in parallel, return first successful result.
+
+    Uses ThreadPoolExecutor to run both searches concurrently.
+    Returns empty list if neither source has API keys configured.
+    """
+    tavily_key = env.get("TAVILY_API_KEY", "")
+    exa_key = env.get("EXA_API_KEY", "")
+
+    if not tavily_key and not exa_key:
+        return []
+
+    # If only one key is available, skip the thread pool overhead
+    if tavily_key and not exa_key:
+        return _search_tavily(query, tavily_key)
+    if exa_key and not tavily_key:
+        return _search_exa(query, exa_key)
+
+    # Both keys available — run in parallel
+    futures: dict = {}
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures[executor.submit(_search_tavily, query, tavily_key)] = "tavily"
+        futures[executor.submit(_search_exa, query, exa_key)] = "exa"
+
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                result = future.result()
+                if result:
+                    # Cancel remaining futures if we got a result
+                    for f in futures:
+                        if f is not future:
+                            f.cancel()
+                    return result
+            except Exception:
+                continue
+
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -234,36 +334,35 @@ def find_examples(
 ) -> list[str]:
     """Find 1-2 reference examples for the given result and platform.
 
-    Tries Tavily search first (if TAVILY_API_KEY is set), then falls back
-    to AI self-generation.
+    Tries Tavily and Exa searches in parallel (if API keys are set),
+    then falls back to AI self-generation.
 
-    Returns a list of example strings (may be empty if both sources fail).
+    Returns a list of example strings (may be empty if all sources fail).
     """
     env = env or os.environ
     ai_options = ai_options or {}
     category = detect_category(result, ai_options=ai_options, env=env)
 
     if verbose:
-        print(f"source2launch: finding reference examples [{category} / {platform}]…", file=sys.stderr)
+        print(f"promoagent: finding reference examples [{category} / {platform}]…", file=sys.stderr)
 
-    # Source 1: Tavily
-    tavily_key = env.get("TAVILY_API_KEY", "")
-    if tavily_key:
-        query = _build_search_query(category, platform)
-        examples = _search_tavily(query, tavily_key)
-        if examples:
-            if verbose:
-                print(f"source2launch: found {len(examples)} example(s) via Tavily", file=sys.stderr)
-            return examples
+    query = _build_search_query(category, platform)
 
-    # Source 2: AI self-generation
+    # Source 1 & 2: Tavily + Exa (parallel)
+    examples = _search_parallel(query, env)
+    if examples:
+        if verbose:
+            print(f"promoagent: found {len(examples)} example(s) via search", file=sys.stderr)
+        return examples
+
+    # Source 3: AI self-generation (zero external dependencies)
     examples = _generate_examples_via_ai(category, platform, ai_options, env)
     if examples:
         if verbose:
-            print(f"source2launch: generated {len(examples)} reference example(s) via AI", file=sys.stderr)
+            print(f"promoagent: generated {len(examples)} reference example(s) via AI", file=sys.stderr)
     else:
         if verbose:
-            print("source2launch: no examples found, continuing without few-shot context", file=sys.stderr)
+            print("promoagent: no examples found, continuing without few-shot context", file=sys.stderr)
 
     return examples
 
@@ -272,21 +371,7 @@ def find_examples(
 # Format examples for prompt injection
 # ---------------------------------------------------------------------------
 
-def format_examples_for_prompt(examples: list[str], platform: str = "all") -> str:
-    """Format examples as a few-shot section for the user prompt."""
-    if not examples:
-        return ""
-
-    platform_label = _platform_label(platform)
-    lines = [
-        f"## 参考示例（{platform_label} 优质内容风格参考）",
-        "",
-        "请学习以下示例的写作风格、结构和语感，但**不要复制内容**。",
-        "你的输出必须完全基于来源证据，与示例内容无关。",
-        "",
-    ]
-    for i, example in enumerate(examples, 1):
-        lines += [f"### 示例 {i}", "", example.strip(), ""]
-
-    lines += ["---", ""]
-    return "\n".join(lines)
+# format_examples_for_prompt() was moved to promo_prompts.py to break the
+# promo_prompts → examples → ai → promo_prompts import cycle.
+# Re-export for any external code that previously imported from here.
+from .promo_prompts import format_examples_for_prompt  # noqa: F401

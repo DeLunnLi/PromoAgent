@@ -54,7 +54,7 @@ def run_optimize(
             try:
                 images = image_future.result()
             except Exception as exc:  # noqa: BLE001
-                print(f"source2launch: image generation failed: {exc}", file=sys.stderr)
+                print(f"promoagent: image generation failed: {exc}", file=sys.stderr)
     else:
         _write_promo_files(out, project, evidence, ai_content, generated)
 

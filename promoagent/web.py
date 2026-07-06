@@ -1,8 +1,8 @@
 """Gradio web interface for Source2Launch.
 
 Usage:
-    source2launch serve
-    source2launch serve --port 7860 --share
+    promoagent serve
+    promoagent serve --port 7860 --share
 
 Requires: pip install gradio
 """
@@ -151,7 +151,7 @@ def _platform_label(key: str) -> str:
 def _check_api_key() -> tuple[bool, str]:
     from .ai import has_ai_key
     if has_ai_key():
-        model = os.environ.get("SOURCE2LAUNCH_MODEL") or os.environ.get("OPENAI_MODEL") or "配置中"
+        model = os.environ.get("PROMOAGENT_MODEL") or os.environ.get("OPENAI_MODEL") or "配置中"
         return True, f"✅ API Key 已配置 · 模型：{model}"
     return False, "❌ 未检测到 API Key（请在 .env 中配置）"
 

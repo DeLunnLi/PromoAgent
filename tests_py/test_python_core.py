@@ -10,17 +10,19 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from source2launch.ai import _detect_provider, _chat_anthropic, _chat_gemini, _chat_ollama, generate_ai_content, parse_json_content, refine_content, validate_content
-from source2launch.publish import (
+from promoagent.ai import _detect_provider, _chat_anthropic, _chat_gemini, _chat_ollama, generate_ai_content, parse_json_content, refine_content, validate_content
+from promoagent.cache import get, set, clear, get_stats, _make_key
+from promoagent.logger import Logger, LogLevel, get_logger, log_duration, LogTimer
+from promoagent.publish import (
     BlueskyPublisher, TelegramPublisher, TwitterPublisher,
     available_publishers, publish_content,
 )
-from source2launch.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
-from source2launch.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
-from source2launch.examples import detect_category, find_examples, format_examples_for_prompt
-from source2launch.interactive import has_significant_gaps, identify_gaps
-from source2launch.optimize import run_optimize
-from source2launch.promo_prompts import PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_user_prompt, expand_presets
+from promoagent.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
+from promoagent.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
+from promoagent.examples import detect_category, find_examples, format_examples_for_prompt
+from promoagent.interactive import has_significant_gaps, identify_gaps
+from promoagent.optimize import run_optimize
+from promoagent.promo_prompts import PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_user_prompt, expand_presets
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests_py" / "fixtures"
@@ -119,7 +121,7 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(parse_github_owner_repo("https://github.com/openai/whisper/tree/main"), ("openai", "whisper"))
 
     def test_github_url_fetch_with_mock_server(self):
-        from source2launch.analyzer import analyze_url_reference
+        from promoagent.analyzer import analyze_url_reference
 
         api_payload = {
             "name": "mock-repo",
@@ -223,11 +225,11 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(_detect_provider({}, env), "ollama")
 
     def test_detect_provider_from_modelscope_key(self):
-        env = {"SOURCE2LAUNCH_MODELSCOPE_API_KEY": "ms-test"}
+        env = {"PROMOAGENT_MODELSCOPE_API_KEY": "ms-test"}
         self.assertEqual(_detect_provider({}, env), "modelscope")
 
     def test_detect_provider_from_explicit_override(self):
-        env = {"SOURCE2LAUNCH_PROVIDER": "anthropic", "OPENAI_API_KEY": "sk-test"}
+        env = {"PROMOAGENT_PROVIDER": "anthropic", "OPENAI_API_KEY": "sk-test"}
         self.assertEqual(_detect_provider({}, env), "anthropic")
 
     def test_detect_provider_from_claude_model_name(self):
@@ -366,11 +368,11 @@ class PythonCoreTest(unittest.TestCase):
 
     def test_python_cli_accepts_subcommand_and_legacy_target(self):
         explicit = subprocess.run(
-            [sys.executable, "-m", "source2launch", "analyze", str(FIXTURES / "healthy-repo"), "--json"],
+            [sys.executable, "-m", "promoagent", "analyze", str(FIXTURES / "healthy-repo"), "--json"],
             cwd=ROOT, text=True, capture_output=True, check=True,
         )
         legacy = subprocess.run(
-            [sys.executable, "-m", "source2launch", str(FIXTURES / "healthy-repo"), "--json"],
+            [sys.executable, "-m", "promoagent", str(FIXTURES / "healthy-repo"), "--json"],
             cwd=ROOT, text=True, capture_output=True, check=True,
         )
         self.assertEqual(json.loads(explicit.stdout)["project"]["name"], "repo-pulse")
@@ -382,7 +384,7 @@ class PythonCoreTest(unittest.TestCase):
             notes.write_text("Use a dry maintainer voice.", encoding="utf-8")
             result = subprocess.run(
                 [
-                    sys.executable, "-m", "source2launch", "promote",
+                    sys.executable, "-m", "promoagent", "promote",
                     str(FIXTURES / "healthy-repo"),
                     "--context", str(notes),
                     "--prompt-note", "Avoid hype.",
@@ -396,21 +398,21 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("Avoid hype.", payload["user"])
         self.assertIn("Use a dry maintainer voice.", payload["user"])
 
-    def test_source2launch_bin_delegates_to_python_cli(self):
+    def test_promoagent_bin_delegates_to_python_cli(self):
         result = subprocess.run(
-            [str(ROOT / "bin" / "source2launch"), "--version"],
+            [str(ROOT / "bin" / "promoagent"), "--version"],
             cwd=ROOT, text=True, capture_output=True, check=True,
         )
-        self.assertEqual(result.stdout.strip(), "0.2.0")
+        self.assertEqual(result.stdout.strip(), "0.3.0")
 
     def test_python_cli_ai_promote_and_optimize_with_mock_server(self):
         server = MockChatServer(sample_ai_content())
         server.start()
-        env = {**os.environ, "SOURCE2LAUNCH_API_KEY": "test-key"}
+        env = {**os.environ, "PROMOAGENT_API_KEY": "test-key"}
         try:
             promoted = subprocess.run(
                 [
-                    sys.executable, "-m", "source2launch", "promote",
+                    sys.executable, "-m", "promoagent", "promote",
                     str(FIXTURES / "healthy-repo"),
                     "--ai", "--json", "--base-url", server.base_url, "--model", "test-model",
                 ],
@@ -420,7 +422,7 @@ class PythonCoreTest(unittest.TestCase):
                 output_dir = Path(tmp) / "launch-assets"
                 subprocess.run(
                     [
-                        sys.executable, "-m", "source2launch", "optimize",
+                        sys.executable, "-m", "promoagent", "optimize",
                         str(FIXTURES / "healthy-repo"),
                         "--ai", "--base-url", server.base_url, "--model", "test-model",
                         "--output", str(output_dir),
@@ -478,7 +480,7 @@ class PythonCoreTest(unittest.TestCase):
         result = analyze_free_text("上海火锅店推广")
         # Remove all API keys for this test
         env_backup = {k: os.environ.pop(k, None) for k in [
-            "TAVILY_API_KEY", "SOURCE2LAUNCH_API_KEY", "SOURCE2LAUNCH_MODELSCOPE_API_KEY",
+            "TAVILY_API_KEY", "PROMOAGENT_API_KEY", "PROMOAGENT_MODELSCOPE_API_KEY",
             "OPENAI_API_KEY", "MODELSCOPE_API_KEY"
         ]}
         try:
@@ -545,7 +547,7 @@ class PythonCoreTest(unittest.TestCase):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
         # Remove any API key from environment for this test
         env_backup = {k: os.environ.pop(k, None) for k in [
-            "SOURCE2LAUNCH_MODELSCOPE_API_KEY", "SOURCE2LAUNCH_API_KEY", "MODELSCOPE_API_KEY"
+            "PROMOAGENT_MODELSCOPE_API_KEY", "PROMOAGENT_API_KEY", "MODELSCOPE_API_KEY"
         ]}
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -621,7 +623,7 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(meta["size"], "1024x1536")   # xhs portrait size
 
     def test_openai_model_detection(self):
-        from source2launch.image import _is_openai_model
+        from promoagent.image import _is_openai_model
         self.assertTrue(_is_openai_model("gpt-image-2"))
         self.assertTrue(_is_openai_model("dall-e-3"))
         self.assertFalse(_is_openai_model("Qwen/Qwen-Image"))
@@ -761,17 +763,118 @@ class PythonCoreTest(unittest.TestCase):
             env_file.write_text("S2L_TEST_KEY=hello\nS2L_ALREADY_SET=original\n", encoding="utf-8")
             os.environ["S2L_ALREADY_SET"] = "original"
             os.environ.pop("S2L_TEST_KEY", None)
-            import source2launch
+            import promoagent
             original_cwd = Path.cwd()
             try:
                 os.chdir(tmp)
-                source2launch._load_dotenv()
+                promoagent._load_dotenv()
             finally:
                 os.chdir(original_cwd)
             self.assertEqual(os.environ.get("S2L_TEST_KEY"), "hello")
             self.assertEqual(os.environ.get("S2L_ALREADY_SET"), "original")
             os.environ.pop("S2L_TEST_KEY", None)
             os.environ.pop("S2L_ALREADY_SET", None)
+
+    # ------------------------------------------------------------------
+    # Cache
+    # ------------------------------------------------------------------
+
+    def test_cache_set_and_get(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            key = ("test", "key")
+            data = {"value": 42, "nested": {"list": [1, 2, 3]}}
+
+            # Set and get
+            set(*key, data=data, cache_dir=cache_dir)
+            cached = get(*key, cache_dir=cache_dir)
+            self.assertEqual(cached, data)
+
+    def test_cache_expires_after_ttl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            key = ("expiring", "key")
+
+            set("expiring", "key", data="test", cache_dir=cache_dir)
+            # Should be expired with 0 TTL
+            cached = get("expiring", "key", cache_dir=cache_dir, ttl_seconds=0)
+            self.assertIsNone(cached)
+
+    def test_cache_clear_removes_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            set("a", "b", data="1", cache_dir=cache_dir)
+            set("a", "c", data="2", cache_dir=cache_dir)
+
+            cleared = clear("a", cache_dir=cache_dir)
+            self.assertEqual(cleared, 2)
+
+    def test_cache_stats_reports_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            set("test", "1", data="a", cache_dir=cache_dir)
+            set("test", "2", data="b", cache_dir=cache_dir)
+
+            stats = get_stats(cache_dir=cache_dir)
+            self.assertEqual(stats["entries"], 2)
+            self.assertEqual(stats["valid_entries"], 2)
+            self.assertIn("size_human", stats)
+
+    def test_cache_key_generation(self):
+        key1 = _make_key("github", "repos", "openai/whisper")
+        key2 = _make_key("github", "repos", "openai/whisper")
+        key3 = _make_key("github", "repos", "anthropic/claude")
+
+        self.assertEqual(key1, key2)
+        self.assertNotEqual(key1, key3)
+
+    # ------------------------------------------------------------------
+    # Logger
+    # ------------------------------------------------------------------
+
+    def test_logger_levels(self):
+        logger = Logger("test", level=LogLevel.WARNING)
+
+        # Debug and info should not be logged
+        self.assertFalse(logger._should_log(LogLevel.DEBUG))
+        self.assertFalse(logger._should_log(LogLevel.INFO))
+        # Warning and above should be logged
+        self.assertTrue(logger._should_log(LogLevel.WARNING))
+        self.assertTrue(logger._should_log(LogLevel.ERROR))
+
+    def test_logger_text_format(self):
+        logger = Logger("test")
+        output = logger._format_text(LogLevel.INFO, "test message", key="value")
+        self.assertIn("test", output)
+        self.assertIn("INFO", output)
+        self.assertIn("key='value'", output)
+
+    def test_logger_json_format(self):
+        import json
+        logger = Logger("test")
+        logger._use_json = True
+        output = logger._format_json(LogLevel.INFO, "test message", count=42)
+
+        parsed = json.loads(output)
+        self.assertEqual(parsed["level"], "INFO")
+        self.assertEqual(parsed["message"], "test message")
+        self.assertEqual(parsed["context"]["count"], 42)
+
+    def test_log_timer_success(self):
+        import time
+        logger = get_logger("test")
+
+        with LogTimer("test_operation", items=10):
+            time.sleep(0.01)  # 10ms
+
+        # Timer should complete without error
+
+    def test_log_duration(self):
+        import time
+        start = time.time()
+        time.sleep(0.01)
+        # Should not raise
+        log_duration("quick_op", start, items=10)
 
 
 # ---------------------------------------------------------------------------

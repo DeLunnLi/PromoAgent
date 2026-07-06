@@ -42,10 +42,10 @@ _FORMAT_OPENAI_SIZES = {
 def _platform_format(platform: str, env: dict[str, str] | None = None) -> str:
     """Determine image format (portrait/square/landscape) from platform name.
 
-    Configurable: SOURCE2LAUNCH_IMAGE_FORMAT=portrait overrides per-platform logic.
+    Configurable: PROMOAGENT_IMAGE_FORMAT=portrait overrides per-platform logic.
     """
     env = env or os.environ
-    override = env.get("SOURCE2LAUNCH_IMAGE_FORMAT", "").lower().strip()
+    override = env.get("PROMOAGENT_IMAGE_FORMAT", "").lower().strip()
     if override in _FORMAT_DIMS:
         return override
 
@@ -92,7 +92,7 @@ def image_config(options: dict[str, Any] | None = None, env: dict[str, str] | No
 
     model = (
         options.get("model")
-        or env.get("SOURCE2LAUNCH_IMAGE_MODEL")
+        or env.get("PROMOAGENT_IMAGE_MODEL")
         or DEFAULT_IMAGE_MODEL
     )
 
@@ -101,21 +101,21 @@ def image_config(options: dict[str, Any] | None = None, env: dict[str, str] | No
         api_key = (
             options.get("api_key")
             or env.get("OPENAI_API_KEY")
-            or env.get("SOURCE2LAUNCH_API_KEY")
+            or env.get("PROMOAGENT_API_KEY")
         )
         default_base = DEFAULT_OPENAI_BASE
     else:
         api_key = (
             options.get("api_key")
-            or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY")
-            or env.get("SOURCE2LAUNCH_API_KEY")
+            or env.get("PROMOAGENT_MODELSCOPE_API_KEY")
+            or env.get("PROMOAGENT_API_KEY")
             or env.get("MODELSCOPE_API_KEY")
         )
         default_base = DEFAULT_MODELSCOPE_BASE
 
     base_url = (
         options.get("base_url")
-        or env.get("SOURCE2LAUNCH_BASE_URL")
+        or env.get("PROMOAGENT_BASE_URL")
         or default_base
     ).rstrip("/")
 
@@ -123,9 +123,9 @@ def image_config(options: dict[str, Any] | None = None, env: dict[str, str] | No
         "apiKey": api_key,
         "baseUrl": base_url,
         "model": model,
-        "quality": options.get("quality") or env.get("SOURCE2LAUNCH_IMAGE_QUALITY") or "medium",
-        "pollIntervalMs": int(options.get("poll_interval_ms") or env.get("SOURCE2LAUNCH_IMAGE_POLL_MS") or 4000),
-        "timeoutMs": int(options.get("timeout_ms") or env.get("SOURCE2LAUNCH_IMAGE_TIMEOUT_MS") or 180_000),
+        "quality": options.get("quality") or env.get("PROMOAGENT_IMAGE_QUALITY") or "medium",
+        "pollIntervalMs": int(options.get("poll_interval_ms") or env.get("PROMOAGENT_IMAGE_POLL_MS") or 4000),
+        "timeoutMs": int(options.get("timeout_ms") or env.get("PROMOAGENT_IMAGE_TIMEOUT_MS") or 180_000),
     }
 
 
@@ -133,8 +133,8 @@ def has_image_key(env: dict[str, str] | None = None) -> bool:
     env = env or os.environ
     return bool(
         env.get("OPENAI_API_KEY")
-        or env.get("SOURCE2LAUNCH_MODELSCOPE_API_KEY")
-        or env.get("SOURCE2LAUNCH_API_KEY")
+        or env.get("PROMOAGENT_MODELSCOPE_API_KEY")
+        or env.get("PROMOAGENT_API_KEY")
         or env.get("MODELSCOPE_API_KEY")
     )
 
@@ -364,13 +364,13 @@ def fetch_readme_images(result: dict[str, Any], output_dir: Path) -> list[dict[s
                     ext = candidate.lstrip(".")
                     break
             out_path = output_dir / f"readme-{i + 1}.{ext}"
-            req = urllib.request.Request(url, headers={"User-Agent": "source2launch/0.2"})
+            req = urllib.request.Request(url, headers={"User-Agent": "promoagent/0.2"})
             with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
                 out_path.write_bytes(resp.read())
             saved.append({"url": url, "path": str(out_path), "source": "readme"})
-            print(f"source2launch: downloaded readme image → {out_path.name}", file=sys.stderr)
+            print(f"promoagent: downloaded readme image → {out_path.name}", file=sys.stderr)
         except Exception as exc:  # noqa: BLE001
-            print(f"source2launch: could not download {url}: {exc}", file=sys.stderr)
+            print(f"promoagent: could not download {url}: {exc}", file=sys.stderr)
 
     return saved
 
@@ -403,11 +403,11 @@ def generate_platform_images(
 
     # Source 2: AI-generated cover images (requires API key)
     # Merge env key into options so image_config and has_image_key both see it
-    effective_env = {**(env or os.environ), **({"SOURCE2LAUNCH_API_KEY": options["api_key"]} if options.get("api_key") else {})}
+    effective_env = {**(env or os.environ), **({"PROMOAGENT_API_KEY": options["api_key"]} if options.get("api_key") else {})}
     if not has_image_key(effective_env):
         print(
-            "source2launch: no image API key found — skipping AI image generation. "
-            "Set SOURCE2LAUNCH_MODELSCOPE_API_KEY to enable.",
+            "promoagent: no image API key found — skipping AI image generation. "
+            "Set PROMOAGENT_MODELSCOPE_API_KEY to enable.",
             file=sys.stderr,
         )
         return generated
@@ -415,7 +415,7 @@ def generate_platform_images(
     cfg = image_config(options, effective_env)
     use_openai = _is_openai_model(cfg["model"])
     provider_label = "openai" if use_openai else "modelscope"
-    print(f"source2launch: image provider → {provider_label} ({cfg['model']})", file=sys.stderr)
+    print(f"promoagent: image provider → {provider_label} ({cfg['model']})", file=sys.stderr)
 
     platforms_to_generate = [("xhs", "xhs"), ("wechat", "wechat")]
     for platform, filename_hint in platforms_to_generate:
@@ -423,7 +423,7 @@ def generate_platform_images(
             prompt = build_image_prompt(result, platform=platform)
             ext = "png" if use_openai else "jpg"
             out_path = images_dir / f"cover-{filename_hint}.{ext}"
-            print(f"source2launch: generating image for {platform}…", file=sys.stderr)
+            print(f"promoagent: generating image for {platform}…", file=sys.stderr)
 
             if use_openai:
                 meta = generate_openai_image(prompt, output_path=out_path, config=cfg, platform=platform)
@@ -432,8 +432,8 @@ def generate_platform_images(
                 meta["platform"] = platform
 
             generated.append(meta)
-            print(f"source2launch: image saved → {out_path.name}", file=sys.stderr)
+            print(f"promoagent: image saved → {out_path.name}", file=sys.stderr)
         except Exception as exc:  # noqa: BLE001
-            print(f"source2launch: image generation failed for {platform}: {exc}", file=sys.stderr)
+            print(f"promoagent: image generation failed for {platform}: {exc}", file=sys.stderr)
 
     return generated

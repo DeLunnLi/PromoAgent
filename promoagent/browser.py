@@ -14,9 +14,9 @@ Supported platforms:
   linkedin           - LinkedIn 发文
 
 Usage:
-    source2launch fill xhs
-    source2launch fill zhihu --assets-dir ./launch-assets
-    source2launch fill twitter --content "直接传入内容"
+    promoagent fill xhs
+    promoagent fill zhihu --assets-dir ./launch-assets
+    promoagent fill twitter --content "直接传入内容"
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _require_playwright():
         from playwright.sync_api import sync_playwright  # noqa: F401
     except ImportError:
         print(
-            "source2launch: browser filling requires Playwright.\n"
+            "promoagent: browser filling requires Playwright.\n"
             "Install it with:\n"
             "  pip install playwright\n"
             "  playwright install chromium",
@@ -288,7 +288,7 @@ def fill_platform(
 
     filler_cls = _FILLERS.get(platform.lower())
     if not filler_cls:
-        print(f"source2launch: unsupported platform '{platform}'", file=sys.stderr)
+        print(f"promoagent: unsupported platform '{platform}'", file=sys.stderr)
         print(f"Supported: {', '.join(sorted(set(_FILLERS.values()), key=lambda c: c.name))}", file=sys.stderr)
         return
 

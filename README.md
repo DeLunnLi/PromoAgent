@@ -1,144 +1,338 @@
-# Source2Launch
+<div align="center">
 
-把开源项目、论文 PDF 和 GitHub 仓库转成多平台推广文案。
+# 🚀 PromoAgent
 
-Source2Launch 先读取来源证据，再调 AI 生成推广内容——不从空白 prompt 开始写，不编造数据。
+**AI Promotion Agent for Launches, Ads, and Multi-Platform Copy**
 
-```sh
-source2launch promote https://github.com/user/repo --platform all --ai
-source2launch promote paper.pdf --platform zhihu --ai
-source2launch optimize . --ai --output launch-assets/
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/Version-0.3.0-orange.svg)](https://github.com/DeLunnLi/PromoAgent/releases)
+
+*Turn projects, products, and ideas into ready-to-publish marketing content*
+
+[Quick Start](#quick-start) • [Features](#features) • [Installation](#installation) • [Documentation](#documentation)
+
+</div>
+
+---
+
+## ✨ What is PromoAgent?
+
+PromoAgent is an **AI-powered promotion agent** that reads your source evidence (GitHub repos, PDFs, product descriptions) and generates platform-native marketing copy.
+
+**Unlike other AI copywriters:**
+- ✅ **Evidence-first**: Analyzes your actual content before generating
+- ✅ **Multi-platform**: One input → tailored content for XHS, Twitter, LinkedIn, etc.
+- ✅ **No hallucination**: All claims are traceable to source evidence
+- ✅ **Agent architecture**: MCP server, browser automation, API publishing
+
+```bash
+# Example: Promote a GitHub repo across all platforms
+promoagent promote https://github.com/user/awesome-project --platform all --ai
+
+# Example: Generate ad copy from a product description
+promoagent promote "AI writing tool, $19/mo, boosts productivity 10x" --platform twitter,linkedin --ai
 ```
 
-## 安装
+---
 
-```sh
-git clone https://github.com/DeLunnLi/Source2Launch.git
-cd Source2Launch
+## 🎬 Demo
+
+```bash
+$ promoagent analyze .
+
+╔═══════════════════════════════════════════════════════════╗
+║  PromoAgent — Your AI Agent for Every Promotion          ║
+╚═══════════════════════════════════════════════════════════╝
+
+📊 Project Analysis
+┌───────────────┬──────────────────────────────────────────┐
+│ Name          │ PromoAgent                               │
+│ Description   │ AI Promotion Agent for Launches...       │
+│ Install       │ pip install -e .                         │
+│ Topics        │ ai, promotion, marketing, launch         │
+│ Files Scanned │ 44                                       │
+└───────────────┴──────────────────────────────────────────┘
+
+✓ No significant risks detected
+```
+
+---
+
+## 🚀 Quick Start
+
+### 1. Install
+
+```bash
+git clone https://github.com/DeLunnLi/PromoAgent.git
+cd PromoAgent
 pip install -e .
 ```
 
-复制配置模板：
+### 2. Setup
 
-```sh
-cp .env.example .env
-# 填入你的 API Key
+```bash
+# Interactive setup wizard
+promoagent setup
 ```
 
-## 配置模型
+Or manually create `.env`:
+```bash
+# Using ModelScope (recommended for China users)
+PROMOAGENT_MODELSCOPE_API_KEY=ms-your-token
+PROMOAGENT_BASE_URL=https://api-inference.modelscope.cn/v1
+PROMOAGENT_MODEL=Qwen/Qwen3.5-397B-A17B
 
-`.env` 文件会在启动时自动加载，无需手动 `source`。
-
-**ModelScope（推荐）：**
-
-```sh
-SOURCE2LAUNCH_MODELSCOPE_API_KEY=ms-your-token
-SOURCE2LAUNCH_BASE_URL=https://api-inference.modelscope.cn/v1
-SOURCE2LAUNCH_MODEL=Qwen/Qwen3.5-397B-A17B
+# Or using OpenAI
+PROMOAGENT_API_KEY=sk-your-key
+PROMOAGENT_MODEL=gpt-4o-mini
 ```
 
-**OpenAI 兼容服务：**
+### 3. Verify
 
-```sh
-SOURCE2LAUNCH_API_KEY=sk-your-key
-SOURCE2LAUNCH_MODEL=gpt-4o-mini
+```bash
+promoagent doctor
 ```
 
-## 三个命令
+### 4. Generate Content
 
-### `analyze` — 查看证据
+```bash
+# Analyze a project
+promoagent analyze .
 
-```sh
-source2launch analyze .
-source2launch analyze https://github.com/openai/whisper
-source2launch analyze paper.pdf --json
+# Generate promotional content
+promoagent promote . --platform all --ai
+
+# Create complete launch package
+promoagent optimize . --ai --output launch-assets/
 ```
 
-输出项目名称、描述、安装命令、文件数量和发布风险提示。
+---
 
-### `promote` — 生成推广文案
+## 🎯 Features
 
-```sh
-# 本地项目
-source2launch promote . --platform xhs --ai
-source2launch promote . --platform all --ai
+### Multi-Source Input
 
-# GitHub 仓库（直接拉取，无需 clone）
-source2launch promote https://github.com/user/repo --platform all --ai
+| Source | Command Example |
+|--------|-----------------|
+| **GitHub Repo** | `promoagent promote https://github.com/user/repo --ai` |
+| **Local Project** | `promoagent promote . --ai` |
+| **PDF Paper** | `promoagent promote paper.pdf --ai` |
+| **Product Description** | `promoagent promote "AI tool, $19/mo" --ai` |
+| **Website URL** | `promoagent promote https://example.com --ai` |
 
-# 论文 PDF
-source2launch promote paper.pdf --platform zhihu --ai
+### Supported Platforms
 
-# 导出 JSON
-source2launch promote . --platform all --ai --json -o promo.json
+| Platform | Key | API Support | Best For |
+|----------|-----|-------------|----------|
+| 小红书 | `xhs` | ❌ Manual | Visual storytelling, lifestyle |
+| 知乎 | `zhihu` | ❌ Manual | Technical deep-dives |
+| 微信 | `wechat` | ❌ Manual | Long-form articles |
+| Twitter/X | `twitter` | ✅ Auto | Quick announcements |
+| LinkedIn | `linkedin` | ✅ Auto | B2B professional |
+| Reddit | `reddit` | ✅ Auto | Community engagement |
+| Show HN | `showhn` | ❌ Manual | Tech launches |
+| Product Hunt | `producthunt` | ❌ Manual | Product launches |
+| Telegram | `telegram` | ✅ Auto | Channel broadcasts |
+| Bluesky | `bluesky` | ✅ Auto | Decentralized social |
+| 微博 | `weibo` | ✅ Auto | Chinese social |
+
+### Three Core Commands
+
+```bash
+# 1. ANALYZE - Extract evidence
+promoagent analyze <target>
+
+# 2. PROMOTE - Generate copy
+promoagent promote <target> --platform <platform> --ai
+
+# 3. OPTIMIZE - Create launch package
+promoagent optimize <target> --ai --output <dir>
 ```
 
-常用平台参数：
+---
 
-| 参数 | 平台 |
-|---|---|
-| `--platform xhs` | 小红书 |
-| `--platform zhihu` | 知乎 |
-| `--platform wechat` | 微信 |
-| `--platform launch` | Show HN + Product Hunt |
-| `--platform all` | 全部平台 |
+## 🛠️ Installation Options
 
-### `optimize` — 保存到文件夹
-
-```sh
-source2launch optimize . --ai --output launch-assets/
-source2launch optimize https://github.com/user/repo --ai
-source2launch optimize paper.pdf --ai --output launch-assets/
-```
-
-输出结构：
-
-```
-launch-assets/
-  INDEX.md              ← 文件导航和发布前提醒
-  evidence-summary.md   ← 项目证据摘要
-  promo-xhs.md          ← 小红书文案
-  promo-zhihu.md
-  promo-wechat.md
-  promo-show-hn.md
-  promo-product-hunt.md
-  promo-twitter.md
-  promo-linkedin.md
-  promo-reddit.md
-```
-
-## Prompt 控制
-
-```sh
-# 指定写作风格
-source2launch promote . --prompt-preset autopr --ai
-source2launch promote paper.pdf --prompt-preset paper,scholardag --ai
-
-# 添加写作指令
-source2launch promote . --prompt-note "像维护者复盘，不要营销腔" --ai
-
-# 附加上下文文件
-source2launch promote . --context ./notes.md --ai
-```
-
-内置 Preset（共 17 个）：`autopr` `scholardag` `grounded` `author` `paper` `launch` `launchkit` `tweet` `zhihu` `xhs` `wechat` 等。
-
-## 审核清单
-
-生成内容后建议确认：
-
-- 文案中的事实是否来自 README、论文、截图、命令或代码证据
-- benchmark、用户数、star 数、媒体报道是否被模型编造
-- 平台语气是否自然，是否需要删减广告腔
-- 发布账号、链接和标签是否正确
-
-## 开发
-
-```sh
+### Basic Install
+```bash
 pip install -e .
-python3 -m unittest discover -s tests_py -v
 ```
 
-## License
+### With Optional Features
+```bash
+# Web UI
+pip install -e ".[web]"
 
-[MIT](LICENSE)
+# Browser auto-fill
+pip install -e ".[fill]"
+
+# MCP Server (Claude Desktop integration)
+pip install -e ".[mcp]"
+
+# PDF OCR support
+pip install -e ".[ocr]"
+
+# Everything
+pip install -e ".[web,fill,mcp,ocr]"
+```
+
+---
+
+## 🤖 MCP Server Integration
+
+Use PromoAgent directly in Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "promoagent": {
+      "command": "promoagent-mcp"
+    }
+  }
+}
+```
+
+Then simply ask:
+> "Analyze https://github.com/owner/repo and generate Xiaohongshu and Twitter content"
+
+**Available Tools:**
+- `pa_analyze` - Analyze any source
+- `pa_promote` - Generate promotional copy
+- `pa_optimize` - Create launch-assets folder
+- `pa_refine` - Iterate on content
+- `pa_check_risks` - Validate launch readiness
+
+---
+
+## 📚 Documentation
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PROMOAGENT_API_KEY` | OpenAI-compatible API key | - |
+| `PROMOAGENT_MODEL` | Model name | `gpt-4o-mini` |
+| `PROMOAGENT_BASE_URL` | API base URL | `https://api.openai.com/v1` |
+| `PROMOAGENT_MAX_TOKENS` | Max generation tokens | `4096` |
+| `PROMOAGENT_TEMPERATURE` | Generation temperature | `0.7` |
+| `TAVILY_API_KEY` | Tavily search API | - |
+| `EXA_API_KEY` | Exa semantic search | - |
+| `FIRECRAWL_API_KEY` | Web scraping | - |
+
+### Publishing Credentials
+
+| Platform | Variables |
+|----------|-----------|
+| Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` |
+| Twitter | `TWITTER_ACCESS_TOKEN` |
+| LinkedIn | `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_AUTHOR_URN` |
+| Reddit | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, ... |
+| Bluesky | `BLUESKY_HANDLE`, `BLUESKY_APP_PASSWORD` |
+| Weibo | `WEIBO_ACCESS_TOKEN` |
+
+---
+
+## 🎨 Advanced Usage
+
+### Custom Writing Style
+
+```bash
+promoagent promote . \
+  --prompt-preset launch \
+  --prompt-note "Like a founder post-mortem, not marketing speak" \
+  --context ./notes.md \
+  --ai
+```
+
+### Browser Auto-Fill
+
+```bash
+# Fill content to Xiaohongshu (requires login)
+promoagent fill xhs --assets-dir ./launch-assets
+
+# Fill to Twitter
+promoagent fill twitter --content "Your tweet here"
+```
+
+### Batch Publishing
+
+```bash
+# Dry run
+promoagent publish telegram --dry-run
+
+# Actually publish
+promoagent publish telegram
+```
+
+---
+
+## 🏗️ Architecture
+
+```
+Input → Evidence Extraction → AI Generation → Multi-Platform Output
+  │          │                    │                │
+  │          │                    │                ├── Twitter
+  │          │                    │                ├── LinkedIn
+  │          │                    │                ├── 小红书
+  │          │                    │                └── ...
+  │          │                    │
+  │          │                    └── Stage 1: Example Search
+  │          │                        Stage 2: Content Generation
+  │          │                        Stage 3: Auto-Improvement
+  │          │
+  │          └── README, package.json, GitHub API, PDF, etc.
+  │
+  └── GitHub URL / Local Path / PDF / Description / Website
+```
+
+---
+
+## 🧪 Development
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+python -m unittest discover -s tests_py -v
+
+# Run specific test
+python -m unittest tests_py.test_python_core.PythonCoreTest.test_analyzes_healthy_repo -v
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- Built with [Rich](https://github.com/Textualize/rich) for beautiful CLI output
+- Multi-provider AI support via OpenAI-compatible APIs
+- Inspired by the need for evidence-based content generation
+
+---
+
+<div align="center">
+
+**[⬆ Back to Top](#promoagent)**
+
+Made with ❤️ by [DeLunnLi](https://github.com/DeLunnLi)
+
+</div>

@@ -242,7 +242,7 @@ class RedditPublisher(BasePlatformPublisher):
         req = urllib.request.Request(
             "https://www.reddit.com/api/v1/access_token",
             data=creds, method="POST",
-            headers={"Authorization": f"Basic {b64}", "User-Agent": "source2launch/0.2", "Content-Type": "application/x-www-form-urlencoded"},
+            headers={"Authorization": f"Basic {b64}", "User-Agent": "promoagent/0.2", "Content-Type": "application/x-www-form-urlencoded"},
         )
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
             return json.loads(resp.read())["access_token"]
@@ -255,7 +255,7 @@ class RedditPublisher(BasePlatformPublisher):
             resp = self._post_form(
                 "https://oauth.reddit.com/api/submit",
                 {"sr": subreddit, "kind": "self", "title": post_title, "text": content, "resubmit": "true"},
-                headers={"Authorization": f"Bearer {token}", "User-Agent": "source2launch/0.2"},
+                headers={"Authorization": f"Bearer {token}", "User-Agent": "promoagent/0.2"},
             )
             errors = resp.get("json", {}).get("errors") or []
             if errors:

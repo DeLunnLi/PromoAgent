@@ -7,6 +7,7 @@ Works for any subject: repos, restaurants, products, events, papers, etc.
 from __future__ import annotations
 
 import copy
+import os
 import re
 import sys
 from pathlib import Path
@@ -83,8 +84,7 @@ def _generate_questions_via_ai(
 ) -> list[str]:
     """Ask the AI to generate the most relevant clarifying questions."""
     from .ai import ai_config, post_json, extract_chat_content
-    from .promo_prompts import build_evidence_brief
-    from .ai import build_promo_payload
+    from .promo_prompts import build_evidence_brief, build_promo_payload
 
     env = env or os.environ
     config = ai_config(ai_options or {}, env)
@@ -204,7 +204,7 @@ def _merge_freeform_answers(result: dict[str, Any], answers: list[tuple[str, str
                 evidence.setdefault("visuals", []).append(f"![image]({part})")
 
         # Detect install commands
-        if re.match(r"^(npm|pip|pipx|cargo|go install|docker|brew|apt|curl|source2launch)\b", answer, re.I):
+        if re.match(r"^(npm|pip|pipx|cargo|go install|docker|brew|apt|curl|promoagent)\b", answer, re.I):
             project["cta"] = answer
             project["installCommand"] = answer
             evidence.setdefault("keyActions", []).append(answer)

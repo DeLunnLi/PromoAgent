@@ -1,4 +1,4 @@
-"""Source2Launch — generate launch promotional content from repos, papers, and PDFs."""
+"""PromoAgent — AI Promotion Agent for Launches, Ads, and Multi-Platform Copy."""
 
 import os
 from pathlib import Path
@@ -32,7 +32,7 @@ from .analyzer import analyze_target  # noqa: E402
 from .ai import generate_ai_content  # noqa: E402
 from .optimize import run_optimize  # noqa: E402
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "__version__",

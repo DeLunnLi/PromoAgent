@@ -128,7 +128,6 @@ def build_promo_user_prompt(
 
     # Few-shot examples from Stage 1
     if examples:
-        from .examples import format_examples_for_prompt
         example_section = format_examples_for_prompt(examples, platform)
         if example_section:
             parts.extend([example_section, ""])
@@ -166,6 +165,21 @@ def build_promo_user_prompt(
         json.dumps(payload, ensure_ascii=False, indent=2),
     ])
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Payload builder  (moved here from ai.py — data prep belongs in promo layer)
+# ---------------------------------------------------------------------------
+
+def build_promo_payload(result: dict[str, Any]) -> dict[str, Any]:
+    """Extract the fields that AI prompts need from a full analyze_target() result."""
+    return {
+        "project":   result.get("project", {}),
+        "evidence":  result.get("evidence", {}),
+        "target":    result.get("target"),
+        "source":    result.get("source"),
+        "inputType": result.get("inputType"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -245,4 +259,56 @@ def build_evidence_brief(payload: dict[str, Any]) -> str:
             msg = risk.get("message") if isinstance(risk, dict) else str(risk)
             lines.append(f"  - {msg}")
 
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Stateless refinement messages  (used by mcp_server.s2l_refine)
+# ---------------------------------------------------------------------------
+
+def build_refine_messages(
+    content: str,
+    feedback: str,
+    platform: str = "",
+) -> list[dict[str, str]]:
+    """Build a one-shot message list for stateless content refinement.
+
+    Unlike ``ai.refine_content()`` (which requires saved conversation history),
+    this is suitable for stateless callers such as the MCP server tools.
+    """
+    platform_hint = f"（目标平台：{platform}）" if platform else ""
+    return [
+        {"role": "system", "content": build_promo_system_prompt()},
+        {
+            "role": "user",
+            "content": (
+                f"以下是已生成的推广文案{platform_hint}，请根据反馈进行改进。\n\n"
+                f"**原文案：**\n{content}\n\n"
+                f"**改进要求：**\n{feedback}\n\n"
+                "请直接输出改进后的完整文案，无需解释修改原因。"
+            ),
+        },
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Few-shot example formatter  (moved here from examples.py to break the
+# promo_prompts → examples → ai → promo_prompts import cycle)
+# ---------------------------------------------------------------------------
+
+def format_examples_for_prompt(examples: list[str], platform: str = "all") -> str:
+    """Format Stage-1 reference examples as a few-shot section for the user prompt."""
+    if not examples:
+        return ""
+    platform_label = platform if platform else "通用"
+    lines = [
+        f"## 参考示例（{platform_label} 优质内容风格参考）",
+        "",
+        "请学习以下示例的写作风格、结构和语感，但**不要复制内容**。",
+        "你的输出必须完全基于来源证据，与示例内容无关。",
+        "",
+    ]
+    for i, example in enumerate(examples, 1):
+        lines += [f"### 示例 {i}", "", example.strip(), ""]
+    lines += ["---", ""]
     return "\n".join(lines)

@@ -21,3 +21,9 @@ promo-image.jpg
 *.s2l-session
 .s2l-cache/
 .s2l-browser/
+
+# PromoAgent runtime files
+.promoagent-session.json
+*.promoagent-session
+.promoagent-cache/
+.promoagent-browser/
