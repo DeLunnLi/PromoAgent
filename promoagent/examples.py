@@ -65,7 +65,7 @@ def detect_category(result: dict[str, Any], ai_options: dict[str, Any] | None = 
         return "通用产品/服务"
 
     # AI-based classification
-    from .ai import ai_config, post_json, extract_chat_content
+    from .ai import ai_config, post_json
     config = ai_config(ai_options, env)
     prompt = (
         f"请用2-5个字说明以下内容属于什么推广类型（例如：餐饮美食、科技工具、学术论文、教育课程、电商产品…）。\n"
@@ -83,7 +83,11 @@ def detect_category(result: dict[str, Any], ai_options: dict[str, Any] | None = 
             headers={"Authorization": f"Bearer {config['apiKey']}"},
             timeout=10,
         )
-        return extract_chat_content(resp).strip()[:30]
+        # Extract text from response
+        choices = resp.get("choices") or []
+        if choices and choices[0].get("message"):
+            return str(choices[0]["message"].get("content", "")).strip()[:30]
+        return "通用产品/服务"
     except (RuntimeError, urllib.error.URLError, json.JSONDecodeError, KeyError, ValueError):
         # AI failed → fall back to source-type heuristic
         source = result.get("source", "")
