@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Generator
 
 # Rich imports
@@ -233,6 +234,8 @@ def print_optimize_manifest(manifest: dict[str, Any]) -> None:
 
 def print_platforms_table() -> None:
     """Print a nice table of supported platforms."""
+    from .platforms import list_platforms
+
     table = Table(
         title="[bold cyan]📱 Supported Platforms[/]",
         box=box.ROUNDED,
@@ -244,22 +247,9 @@ def print_platforms_table() -> None:
     table.add_column("Style", style="italic")
     table.add_column("API", justify="center")
 
-    platforms = [
-        ("小红书", "xhs", "图文种草，口语化", "❌"),
-        ("知乎", "zhihu", "专业深度，结构化", "❌"),
-        ("微信", "wechat", "正式，长内容", "❌"),
-        ("Twitter/X", "twitter", "简洁有力，280字", "✅"),
-        ("LinkedIn", "linkedin", "专业人脉，B2B", "✅"),
-        ("Reddit", "reddit", "社区驱动，真实", "✅"),
-        ("Show HN", "showhn", "极简，技术原创", "❌"),
-        ("Product Hunt", "producthunt", "发布日，tagline", "❌"),
-        ("Telegram", "telegram", "频道/群组", "✅"),
-        ("Bluesky", "bluesky", "去中心化", "✅"),
-        ("微博", "weibo", "大众社交，140字", "✅"),
-    ]
-
-    for name, key, style, api in platforms:
-        table.add_row(name, key, style, api)
+    for spec in list_platforms():
+        api_mark = "✅" if spec.api_support else "❌"
+        table.add_row(f"{spec.icon} {spec.name_cn}", spec.key, spec.style, api_mark)
 
     console.print(table)
 

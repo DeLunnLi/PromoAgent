@@ -18,21 +18,32 @@
 
 ## ✨ What is PromoAgent?
 
-PromoAgent is an **AI-powered promotion agent** that reads your source evidence (GitHub repos, PDFs, product descriptions) and generates platform-native marketing copy.
+PromoAgent is an **AI-powered promotion agent** that reads your source evidence (GitHub repos, PDFs, product descriptions, release notes) and turns it into campaign-ready copy, launch assets, and ad-image briefs.
 
 **Unlike other AI copywriters:**
 - ✅ **Evidence-first**: Analyzes your actual content before generating
 - ✅ **Multi-platform**: One input → tailored content for XHS, Twitter, LinkedIn, etc.
+- ✅ **Campaign planning**: Audience segments, channel fit, launch sequence, and creative variants
+- ✅ **Release-ready**: Translate README/CHANGELOG/release notes into user-facing announcements
+- ✅ **Ad creative briefs**: Generate platform-aware image prompts and overlay copy from the same evidence
 - ✅ **No hallucination**: All claims are traceable to source evidence
 - ✅ **Agent architecture**: MCP server, browser automation, API publishing
 
 ```bash
 # Example: Promote a GitHub repo across all platforms
-promoagent promote https://github.com/user/awesome-project --platform all --ai
+promoagent draft https://github.com/user/awesome-project
 
 # Example: Generate ad copy from a product description
-promoagent promote "AI writing tool, $19/mo, boosts productivity 10x" --platform twitter,linkedin --ai
+promoagent draft "AI writing tool, $19/mo, boosts productivity 10x" --platforms twitter,linkedin
+
+# Example: Interactive editing - pause at blueprint stage
+promoagent draft ./CHANGELOG.md --interactive
+
+# Example: Generate with images and save to folder
+promoagent draft . --image --output-dir launch-assets
 ```
+
+> **Note**: `promote`/`optimize`/`refine` are deprecated. Use `draft` for better results.
 
 ---
 
@@ -100,11 +111,17 @@ promoagent doctor
 # Analyze a project
 promoagent analyze .
 
-# Generate promotional content
-promoagent promote . --platform all --ai
+# Generate promotional content (new unified command)
+promoagent draft .
 
-# Create complete launch package
-promoagent optimize . --ai --output launch-assets/
+# Interactive editing - pause to edit blueprint
+promoagent draft . --interactive
+
+# Create complete launch package with images
+promoagent draft . --image --output-dir launch-assets/
+
+# Continue from saved blueprint
+promoagent draft --resume --stage produce
 ```
 
 ---
@@ -115,11 +132,11 @@ promoagent optimize . --ai --output launch-assets/
 
 | Source | Command Example |
 |--------|-----------------|
-| **GitHub Repo** | `promoagent promote https://github.com/user/repo --ai` |
-| **Local Project** | `promoagent promote . --ai` |
-| **PDF Paper** | `promoagent promote paper.pdf --ai` |
-| **Product Description** | `promoagent promote "AI tool, $19/mo" --ai` |
-| **Website URL** | `promoagent promote https://example.com --ai` |
+| **GitHub Repo** | `promoagent draft https://github.com/user/repo` |
+| **Local Project** | `promoagent draft .` |
+| **PDF Paper** | `promoagent draft paper.pdf` |
+| **Product Description** | `promoagent draft "AI tool, $19/mo"` |
+| **Website URL** | `promoagent draft https://example.com` |
 
 ### Supported Platforms
 
@@ -137,17 +154,26 @@ promoagent optimize . --ai --output launch-assets/
 | Bluesky | `bluesky` | ✅ Auto | Decentralized social |
 | 微博 | `weibo` | ✅ Auto | Chinese social |
 
-### Three Core Commands
+### Three-Stage Generation Pipeline
 
 ```bash
-# 1. ANALYZE - Extract evidence
-promoagent analyze <target>
+# 1. RESEARCH - Extract facts and strategy
+promoagent draft <target> --stage research
 
-# 2. PROMOTE - Generate copy
-promoagent promote <target> --platform <platform> --ai
+# 2. BLUEPRINT - Structured editable content
+promoagent draft <target> --stage blueprint --interactive
 
-# 3. OPTIMIZE - Create launch package
-promoagent optimize <target> --ai --output <dir>
+# 3. PRODUCE - Platform-native content
+promoagent draft --resume --stage produce
+```
+
+### Legacy Commands (Deprecated)
+
+```bash
+# Old commands - still work but show deprecation warning
+promoagent promote <target> --platform all --ai  # Use 'draft' instead
+promoagent optimize <target> --ai --output <dir>  # Use 'draft' instead
+promoagent refine "feedback"                       # Use 'draft --resume --edit' instead
 ```
 
 ---
@@ -243,6 +269,42 @@ promoagent promote . \
   --prompt-note "Like a founder post-mortem, not marketing speak" \
   --context ./notes.md \
   --ai
+```
+
+### Interactive Ad Images
+
+```bash
+promoagent optimize . \
+  --image \
+  --image-platforms xhs,wechat \
+  --image-skill auto \
+  --image-interactive \
+  --image-variants 2
+```
+
+`--image-skill auto` will choose a creative skill by recommendation type:
+`b2b-saas` for software/tools, `food-local` for restaurant and local lifestyle,
+`product-hero` for products, `event-poster` for events, `research-editorial` for papers,
+and `service-trust` for services/courses. Use `xhs-lifestyle` when the image should feel
+like a Xiaohongshu creator cover instead of a corporate banner.
+These built-in image skills use a structured prompt-spec approach inspired by the
+[GPT-Image2-Skill](https://github.com/wuyoscar/GPT-Image2-Skill) gallery/craft workflow:
+canvas and layout first, then concrete scene systems, material, lighting, palette, and checks.
+The generator treats the AI image as a clean campaign background plate and renders final
+headline/CTA typography locally, so the subject stays out of the copy-safe zone and Chinese
+text remains crisp.
+
+For non-interactive runs, pass the ad copy directly:
+
+```bash
+promoagent optimize . \
+  --image \
+  --image-platforms xhs \
+  --image-skill b2b-saas \
+  --image-title "一键把项目变成推广素材" \
+  --image-subtitle "自动读证据，生成多平台文案和广告封面" \
+  --image-cta "立即生成" \
+  --image-badges "小红书封面,多平台推广,证据驱动"
 ```
 
 ### Browser Auto-Fill

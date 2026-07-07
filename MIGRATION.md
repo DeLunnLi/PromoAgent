@@ -1,0 +1,139 @@
+# 迁移指南：从旧流程到新流程
+
+## 概述
+
+`promoagent` 已从旧的 `promote`/`optimize`/`refine` 流程迁移到新的三阶段 `draft` 流程。
+
+## 命令映射
+
+| 旧命令 | 新命令 | 说明 |
+|--------|--------|------|
+| `promoagent promote . --ai` | `promoagent draft .` | 生成推广内容 |
+| `promoagent optimize . --ai` | `promoagent draft . --output-dir launch-assets` | 生成并保存文件 |
+| `promoagent refine "修改"` | `promoagent draft --resume --edit edits.json` | 编辑并重新生成 |
+| `promoagent promote . --ai --platform xiaohongshu` | `promoagent draft . --platforms xiaohongshu` | 指定平台 |
+| `promoagent optimize . --ai --image` | `promoagent draft . --image --output-dir launch-assets` | 生成图片 |
+
+## 新功能：Blueprint 编辑
+
+新流程引入了 **Blueprint** 中间格式，可以在生成最终内容前编辑：
+
+```bash
+# 1. 生成到 blueprint 阶段并暂停
+promoagent draft "项目描述" --interactive
+
+# 2. 编辑 .blueprint.json 文件
+
+# 3. 继续生成最终内容
+promoagent draft --resume --stage produce
+```
+
+### Blueprint 结构
+
+```json
+{
+  "version": "2.0",
+  "positioning": {
+    "one_liner": "一句话定位",
+    "core_promise": "核心承诺"
+  },
+  "elements": [
+    {
+      "id": "hook-main",
+      "type": "hook",
+      "label": "开场钩子",
+      "content": "当前文案",
+      "variants": ["变体A", "变体B", "变体C"],
+      "editable": true
+    }
+  ]
+}
+```
+
+### 编辑方式
+
+**方式 1：直接编辑 JSON**
+```bash
+# 修改 .blueprint.json 中的 content 字段
+promoagent draft --resume --stage produce
+```
+
+**方式 2：使用 edits 文件**
+```bash
+# 创建 edits.json
+{
+  "hook-main": "新的钩子文案",
+  "_selectVariant": {"cta-main": 1}
+}
+
+# 应用编辑
+promoagent draft --resume --edit edits.json
+```
+
+**方式 3：选择变体**
+```bash
+# 在 edits.json 中选择变体
+{
+  "_selectVariant": {
+    "hook-main": 0,
+    "cta-main": 2
+  }
+}
+```
+
+**方式 4：调整结构**
+```bash
+# 在 edits.json 中调整元素顺序
+{
+  "_reorder": ["hook-main", "story-1", "solution-1", "cta-main"]
+}
+```
+
+## 阶段控制
+
+新流程分为三个阶段：
+
+```bash
+# 只运行研究阶段
+promoagent draft . --stage research
+
+# 运行到 blueprint（可编辑）
+promoagent draft . --stage blueprint
+
+# 从 blueprint 生成最终内容
+promoagent draft --resume --stage produce
+
+# 完整流程
+promoagent draft . --stage all
+```
+
+## 向后兼容
+
+旧命令仍然可用，但会显示弃用警告：
+
+```bash
+$ promoagent promote . --ai
+⚠️  `promote` is deprecated. Use `promoagent draft` for better results.
+```
+
+## 主要改进
+
+1. **更清晰的结构**：研究 → Blueprint → 产出
+2. **可编辑的中间格式**：Blueprint 允许在生成前调整内容
+3. **并行生成**：多平台内容同时生成
+4. **阶段缓存**：失败后可从任意阶段恢复
+5. **更好的错误处理**：每个阶段独立重试
+
+## 常见问题
+
+### Q: 旧命令会被删除吗？
+A: 短期内不会，但建议尽快迁移到 `draft`。
+
+### Q: 如何获取之前的功能？
+A: 所有旧功能都已迁移到 `draft`，见上方命令映射表。
+
+### Q: Blueprint 文件在哪里？
+A: 运行 `promoagent draft . --interactive` 后会生成 `.blueprint.json`。
+
+### Q: 如何批量编辑？
+A: 使用 `--edit` 参数传入 JSON 文件，支持批量修改、变体选择、结构调整。

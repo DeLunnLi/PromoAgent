@@ -375,7 +375,7 @@ def find_examples(
 # Format examples for prompt injection
 # ---------------------------------------------------------------------------
 
-# format_examples_for_prompt() was moved to promo_prompts.py to break the
-# promo_prompts → examples → ai → promo_prompts import cycle.
-# Re-export for any external code that previously imported from here.
-from .promo_prompts import format_examples_for_prompt  # noqa: F401
+# NOTE: format_examples_for_prompt() previously lived in promo_prompts.py,
+# which was removed during the v0.4 draft-pipeline refactor. The new
+# pipeline (promoagent.pipeline) injects examples inline and no longer
+# consumes this helper, so the re-export is intentionally dropped.

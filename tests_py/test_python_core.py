@@ -1,31 +1,107 @@
+"""Test suite for PromoAgent v0.4 (draft pipeline) API.
+
+Covers the modules that exist in the current codebase:
+- analyzer, cache, logger, publish, optimize (unchanged surface)
+- ai (unified dispatch_chat / ai_config / _detect_provider)
+- image, image_skills (current image generation)
+- examples (detect_category / find_examples)
+- platforms (centralized PlatformSpec registry)  [new]
+- pipeline (3-stage research -> blueprint -> produce)  [new]
+
+Tests for removed modules (interactive, promo_prompts) and removed ai
+helpers (generate_ai_content / refine_content / validate_content /
+_chat_*) have been deleted. Tests for the new pipeline and platforms
+modules have been added.
+"""
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import threading
-import urllib.error
-import urllib.request
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
-from promoagent.ai import _detect_provider, _chat_anthropic, _chat_gemini, _chat_ollama, generate_ai_content, parse_json_content, refine_content, validate_content
-from promoagent.cache import get, set, clear, get_stats, _make_key
+from promoagent.ai import _detect_provider, ai_config, dispatch_chat, parse_json_content
+from promoagent import cache
 from promoagent.logger import Logger, LogLevel, get_logger, log_duration, LogTimer
 from promoagent.publish import (
     BlueskyPublisher, TelegramPublisher, TwitterPublisher,
     available_publishers, publish_content,
 )
 from promoagent.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
-from promoagent.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
-from promoagent.examples import detect_category, find_examples, format_examples_for_prompt
-from promoagent.interactive import has_significant_gaps, identify_gaps
+from promoagent.image import (
+    apply_text_overlay, build_image_prompt, fetch_readme_images,
+    generate_openai_image, generate_platform_images, image_brief, image_config,
+)
+from promoagent.examples import detect_category, find_examples
+from promoagent.image_skills import list_image_skills, resolve_image_skill
 from promoagent.optimize import run_optimize
-from promoagent.promo_prompts import PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_user_prompt, expand_presets
+from promoagent.platforms import (
+    PLATFORMS, get_platform, get_primary_platforms, list_platforms, to_prompt_dict,
+)
+import promoagent.pipeline as pipeline
+from promoagent.pipeline import (
+    PipelineState, _source_id, stage_research, stage_blueprint, stage_produce,
+    edit_blueprint, preview_blueprint, run_pipeline,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests_py" / "fixtures"
+
+
+def _research_payload() -> dict:
+    return {
+        "facts": {
+            "core_claim": "一句话核心主张",
+            "key_facts": ["事实1", "事实2"],
+            "unique_angles": ["角度1"],
+            "target_users": [{"segment": "开发者", "pain": "推广难", "desire": "省时间"}],
+            "use_cases": ["场景1"],
+            "evidence_strength": "medium",
+            "gaps": ["缺口1"],
+            "risks": ["风险1"],
+        },
+        "strategy": {
+            "positioning": {"one_liner": "定位", "promise": "承诺", "differentiator": "差异"},
+            "creative_direction": {
+                "main_hook": "主推角度", "hook_variants": ["v1", "v2", "v3"],
+                "tone": "专业", "key_message": "核心信息",
+            },
+            "recommended_platforms": ["xiaohongshu", "twitter"],
+            "platform_rationale": "理由",
+            "content_sequence": ["xiaohongshu", "twitter"],
+        },
+    }
+
+
+def _blueprint_payload() -> dict:
+    return {
+        "version": "2.0",
+        "source": {"project_name": "Test", "source_url": ""},
+        "positioning": {"one_liner": "定位", "core_promise": "承诺", "key_message": "核心信息"},
+        "elements": [
+            {
+                "id": "hook-main", "type": "hook", "label": "开场钩子",
+                "content": "钩子内容", "variants": ["v1", "v2", "v3", "v4"],
+                "char_limit": 100, "purpose": "抓注意力", "editable": False, "required": True,
+            },
+            {
+                "id": "cta-main", "type": "cta", "label": "行动号召",
+                "content": "立即试用", "variants": ["c1", "c2", "c3"],
+                "char_limit": 80, "purpose": "转化", "editable": False, "required": True,
+            },
+        ],
+        "structure": {
+            "recommended_order": ["hook-main", "cta-main"],
+            "alternative_structures": [
+                {"name": "故事型", "order": ["hook-main", "cta-main"]},
+            ],
+        },
+        "metrics": {"estimated_read_time": "30s", "emotion_profile": "neutral", "complexity_score": 3},
+    }
 
 
 class PythonCoreTest(unittest.TestCase):
@@ -36,15 +112,10 @@ class PythonCoreTest(unittest.TestCase):
 
     def test_analyzes_healthy_repo(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
-
         self.assertEqual(result["project"]["name"], "repo-pulse")
         self.assertEqual(result["project"]["installCommand"], "npx repo-pulse .")
         self.assertEqual(result["repository"]["readme"], "README.md")
         self.assertTrue(result["evidence"]["visuals"])
-
-    # ------------------------------------------------------------------
-    # Free-text input (general promotion agent)
-    # ------------------------------------------------------------------
 
     def test_analyze_free_text_restaurant(self):
         result = analyze_free_text("上海阿强火锅，主打麻辣鲜香，人均80元，位于静安区南京西路")
@@ -65,29 +136,6 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(result["source"], "text")
         self.assertEqual(result["inputType"], "text")
 
-    def test_evidence_brief_handles_free_text_result(self):
-        result = analyze_free_text("上海阿强火锅，麻辣鲜香，人均80，静安区")
-        payload = {"project": result["project"], "evidence": result["evidence"]}
-        brief = build_evidence_brief(payload)
-        self.assertIn("上海阿强火锅", brief)
-        self.assertIn("推广主体", brief)
-        self.assertIn("核心描述", brief)
-
-    def test_identify_gaps_for_thin_text_input(self):
-        result = analyze_free_text("火锅店")  # very thin
-        gaps = identify_gaps(result)
-        self.assertIn("description", gaps)   # description is too short
-        self.assertIn("cta", gaps)           # no CTA
-        self.assertTrue(len(gaps) <= 3)
-
-    def test_has_significant_gaps_for_repo(self):
-        result = analyze_target("healthy-repo", cwd=FIXTURES)
-        # Repo with README, install command, visuals — should not have significant gaps
-        # (or at least cta and description are filled)
-        gaps = identify_gaps(result)
-        # Install command fills cta, description from README fills description
-        self.assertNotIn("cta", gaps)
-
     def test_analyzes_markdown_file_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             doc = Path(tmp) / "paper.md"
@@ -106,14 +154,8 @@ class PythonCoreTest(unittest.TestCase):
 
     def test_analyzes_remote_url_reference_without_fetching(self):
         result = analyze_target("https://github.com/example/repo-pulse")
-
-        # Falls back to placeholder when network/repo not found
         self.assertIn(result["source"], ("url", "github"))
         self.assertEqual(result["project"]["name"], "repo-pulse")
-
-    # ------------------------------------------------------------------
-    # GitHub URL fetching
-    # ------------------------------------------------------------------
 
     def test_parse_github_owner_repo(self):
         self.assertEqual(parse_github_owner_repo("https://github.com/openai/whisper"), ("openai", "whisper"))
@@ -152,184 +194,451 @@ class PythonCoreTest(unittest.TestCase):
         self.assertTrue(result["evidence"]["visuals"])
 
     # ------------------------------------------------------------------
-    # AI
+    # AI (unified dispatch)
     # ------------------------------------------------------------------
-
-    def test_ai_generation_with_openai_compatible_server(self):
-        result = analyze_target("healthy-repo", cwd=FIXTURES)
-        server = MockChatServer(sample_ai_content())
-        server.start()
-        try:
-            generated = generate_ai_content(result, platform="xhs", options={
-                "base_url": server.base_url,
-                "api_key": "test-key",
-                "model": "test-model",
-            })
-        finally:
-            server.stop()
-
-        self.assertEqual(generated["model"], "test-model")
-        self.assertEqual(generated["content"]["positioning"], "测试定位")
-        self.assertIn("qualityRubric", server.last_request["messages"][1]["content"])
-
-    # ------------------------------------------------------------------
-    # Output validation
-    # ------------------------------------------------------------------
-
-    def test_validate_content_catches_missing_rubric(self):
-        result = analyze_target("healthy-repo", cwd=FIXTURES)
-        content = {
-            "promotionStrategy": {"qualityRubric": {}},
-            "promotions": {}
-        }
-        issues = validate_content(content, result)
-        rubric_issues = [i for i in issues if "qualityRubric" in i["message"]]
-        self.assertGreater(len(rubric_issues), 0)
-
-    def test_validate_content_passes_clean_output(self):
-        result = analyze_target("healthy-repo", cwd=FIXTURES)
-        content = {
-            "promotionStrategy": {"qualityRubric": {
-                "fidelity": {"checks": ["事实准确"]},
-                "engagement": {"checks": ["开头具体"]},
-                "alignment": {"checks": ["平台语气匹配"]},
-            }},
-            "promotions": {
-                "xiaohongshu": {
-                    "titles": ["用一行命令生成推广文案"],
-                    "markdown": "npx repo-pulse . 把仓库变成小红书帖子，5分钟搞定。",
-                }
-            }
-        }
-        issues = validate_content(content, result)
-        self.assertEqual(issues, [])  # No structural issues
 
     def test_parse_json_content_accepts_fenced_json(self):
         parsed = parse_json_content("```json\n{\"ok\": true}\n```")
         self.assertEqual(parsed, {"ok": True})
 
-    # ------------------------------------------------------------------
-    # Multi-provider LLM support
-    # ------------------------------------------------------------------
+    def test_parse_json_content_extracts_embedded_json(self):
+        parsed = parse_json_content("Here is the result: {\"a\": 1, \"b\": 2} done.")
+        self.assertEqual(parsed, {"a": 1, "b": 2})
 
     def test_detect_provider_from_anthropic_key(self):
-        env = {"ANTHROPIC_API_KEY": "sk-ant-test"}
-        self.assertEqual(_detect_provider({}, env), "anthropic")
+        self.assertEqual(_detect_provider({}, {"ANTHROPIC_API_KEY": "sk-ant-test"}), "anthropic")
 
     def test_detect_provider_from_gemini_key(self):
-        env = {"GOOGLE_API_KEY": "test-key"}
-        self.assertEqual(_detect_provider({}, env), "gemini")
+        self.assertEqual(_detect_provider({}, {"GOOGLE_API_KEY": "test-key"}), "gemini")
 
     def test_detect_provider_from_ollama_url(self):
-        env = {"OLLAMA_BASE_URL": "http://localhost:11434"}
-        self.assertEqual(_detect_provider({}, env), "ollama")
+        self.assertEqual(_detect_provider({}, {"OLLAMA_BASE_URL": "http://localhost:11434"}), "ollama")
 
     def test_detect_provider_from_modelscope_key(self):
-        env = {"PROMOAGENT_MODELSCOPE_API_KEY": "ms-test"}
-        self.assertEqual(_detect_provider({}, env), "modelscope")
+        self.assertEqual(_detect_provider({}, {"PROMOAGENT_MODELSCOPE_API_KEY": "ms-test"}), "modelscope")
 
     def test_detect_provider_from_explicit_override(self):
         env = {"PROMOAGENT_PROVIDER": "anthropic", "OPENAI_API_KEY": "sk-test"}
         self.assertEqual(_detect_provider({}, env), "anthropic")
 
     def test_detect_provider_from_claude_model_name(self):
-        opts = {"model": "claude-opus-4-5"}
-        self.assertEqual(_detect_provider(opts, {}), "anthropic")
+        self.assertEqual(_detect_provider({"model": "claude-opus-4-5"}, {}), "anthropic")
 
     def test_detect_provider_from_gemini_model_name(self):
-        opts = {"model": "gemini-2.0-flash"}
-        self.assertEqual(_detect_provider(opts, {}), "gemini")
+        self.assertEqual(_detect_provider({"model": "gemini-2.0-flash"}, {}), "gemini")
 
     def test_detect_provider_defaults_to_openai(self):
         self.assertEqual(_detect_provider({}, {}), "openai")
 
-    def test_chat_anthropic_with_mock_server(self):
-        """_chat_anthropic converts messages and parses Anthropic response format."""
+    def test_ai_config_detects_anthropic_from_key(self):
+        cfg = ai_config(options={"api_key": "sk-ant-test"}, env={})
+        self.assertEqual(cfg["provider"], "anthropic")
+        self.assertEqual(cfg["model"], "claude-haiku-4-5")
+        self.assertTrue(cfg["apiKey"])
+
+    def test_ai_config_explicit_provider(self):
+        cfg = ai_config(options={"provider": "gemini"}, env={})
+        self.assertEqual(cfg["provider"], "gemini")
+
+    def test_ai_config_openai_default_model(self):
+        cfg = ai_config(options={}, env={})
+        self.assertEqual(cfg["provider"], "openai")
+        self.assertEqual(cfg["model"], "gpt-4o-mini")
+
+    def test_dispatch_chat_openai_with_mock_server(self):
+        server = MockChatServer({"key": "value"})
+        server.start()
+        try:
+            config = ai_config(options={
+                "base_url": server.base_url, "api_key": "test-key",
+                "model": "test-model", "provider": "openai",
+            })
+            content = dispatch_chat(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                config,
+            )
+        finally:
+            server.stop()
+        self.assertEqual(parse_json_content(content), {"key": "value"})
+
+    def test_dispatch_chat_anthropic_with_mock_server(self):
         server = MockAnthropicServer(json.dumps({"key": "value"}))
         server.start()
         try:
-            result = _chat_anthropic(
-                [
-                    {"role": "system", "content": "You are a helper."},
-                    {"role": "user", "content": "Say hello."},
-                ],
-                {
-                    "apiKey": "test-key",
-                    "baseUrl": server.base_url,
-                    "model": "claude-haiku-4-5",
-                    "maxTokens": 100,
-                    "temperature": 0.7,
-                    "timeout": 10,
-                },
+            config = {
+                "provider": "anthropic", "apiKey": "test-key",
+                "baseUrl": server.base_url, "model": "claude-haiku-4-5",
+                "maxTokens": 100, "temperature": 0.7, "timeout": 10,
+            }
+            content = dispatch_chat(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                config,
             )
         finally:
             server.stop()
-        self.assertIn("key", result)
+        self.assertEqual(parse_json_content(content), {"key": "value"})
 
-    def test_chat_gemini_with_mock_server(self):
-        """_chat_gemini converts messages and parses Gemini response format."""
+    def test_dispatch_chat_gemini_with_mock_server(self):
         server = MockGeminiServer(json.dumps({"gemini": "response"}))
         server.start()
         try:
-            result = _chat_gemini(
-                [
-                    {"role": "system", "content": "You are a helper."},
-                    {"role": "user", "content": "Say hello."},
-                ],
-                {
-                    "apiKey": "test-key",
-                    "baseUrl": server.base_url,
-                    "model": "gemini-flash",
-                    "maxTokens": 100,
-                    "temperature": 0.7,
-                    "timeout": 10,
-                },
+            config = {
+                "provider": "gemini", "apiKey": "test-key",
+                "baseUrl": server.base_url, "model": "gemini-flash",
+                "maxTokens": 100, "temperature": 0.7, "timeout": 10,
+            }
+            content = dispatch_chat(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                config,
             )
         finally:
             server.stop()
-        self.assertIn("gemini", result)
+        self.assertEqual(parse_json_content(content), {"gemini": "response"})
 
-    def test_chat_ollama_with_mock_server(self):
-        """_chat_ollama uses /api/chat endpoint and parses Ollama response."""
-        server = MockOllamaServer(json.dumps({"ollama": "response"}))
+    def test_dispatch_chat_ollama_uses_openai_compatible_endpoint(self):
+        """Ollama is dispatched via the OpenAI-compatible /v1/chat/completions."""
+        server = MockChatServer({"ollama": "response"})
         server.start()
         try:
-            result = _chat_ollama(
-                [{"role": "user", "content": "Say hello."}],
-                {
-                    "apiKey": "",
-                    "baseUrl": server.base_url,
-                    "model": "llama3.2",
-                    "maxTokens": 100,
-                    "temperature": 0.7,
-                    "timeout": 10,
-                },
+            config = ai_config(options={
+                "base_url": server.base_url,  # already ends with /v1
+                "model": "llama3.2", "provider": "ollama",
+            })
+            self.assertEqual(config["provider"], "ollama")
+            content = dispatch_chat(
+                [{"role": "user", "content": "hi"}], config,
             )
         finally:
             server.stop()
-        self.assertIn("ollama", result)
+        self.assertEqual(parse_json_content(content), {"ollama": "response"})
+
+    def test_ai_config_ollama_appends_v1_to_bare_host(self):
+        cfg = ai_config(options={"provider": "ollama", "base_url": "http://localhost:11434"})
+        self.assertEqual(cfg["baseUrl"], "http://localhost:11434/v1")
+
+    def test_ai_config_ollama_keeps_existing_v1(self):
+        cfg = ai_config(options={"provider": "ollama", "base_url": "http://localhost:11434/v1"})
+        self.assertEqual(cfg["baseUrl"], "http://localhost:11434/v1")
+
+    def test_dispatch_chat_unknown_provider_raises(self):
+        with self.assertRaises(ValueError):
+            dispatch_chat(
+                [{"role": "user", "content": "hi"}],
+                {"provider": "unknown", "apiKey": "k"},
+            )
 
     # ------------------------------------------------------------------
-    # Prompt presets
+    # Platforms (centralized registry)
     # ------------------------------------------------------------------
 
-    def test_expand_presets_returns_hint_string(self):
-        result = expand_presets(["autopr", "paper"])
-        self.assertIn("autopr", result)
-        self.assertIn("paper", result)
-        self.assertIsInstance(result, str)
+    def test_get_platform_returns_spec(self):
+        spec = get_platform("xiaohongshu")
+        self.assertIsNotNone(spec)
+        self.assertEqual(spec.name_cn, "小红书")
+        self.assertEqual(spec.aspect_ratio, "3:4")
 
-    def test_expand_presets_empty_returns_empty(self):
-        self.assertEqual(expand_presets([]), "")
+    def test_get_platform_aliases_resolve(self):
+        self.assertEqual(get_platform("xhs").key, "xiaohongshu")
+        self.assertEqual(get_platform("x").key, "twitter")
+        self.assertIsNone(get_platform("does-not-exist"))
 
-    def test_prompt_schema_requires_quality_rubric(self):
+    def test_to_prompt_dict_has_expected_keys(self):
+        d = to_prompt_dict(get_platform("twitter"))
+        self.assertEqual(set(d.keys()), {"format", "style", "length", "emoji", "tone"})
+
+    def test_list_platforms_is_unique(self):
+        plats = list_platforms()
+        keys = [p.key for p in plats]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertIn("twitter", keys)
+        self.assertIn("xiaohongshu", keys)
+
+    def test_get_primary_platforms_excludes_aliases(self):
+        primaries = get_primary_platforms()
+        self.assertIn("xiaohongshu", primaries)
+        self.assertIn("twitter", primaries)
+        self.assertNotIn("xhs", primaries)
+        self.assertNotIn("x", primaries)
+
+    def test_platforms_registry_has_api_support_flag(self):
+        self.assertTrue(get_platform("twitter").api_support)
+        self.assertFalse(get_platform("xiaohongshu").api_support)
+
+    # ------------------------------------------------------------------
+    # Pipeline: state + source id
+    # ------------------------------------------------------------------
+
+    def test_pipeline_state_set_get_has_clear(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("src-1", cache_dir=Path(tmp))
+            self.assertFalse(state.has("research"))
+            state.set("research", {"data": {"x": 1}})
+            self.assertTrue(state.has("research"))
+            self.assertEqual(state.get("research")["data"]["x"], 1)
+            state.clear()
+            self.assertFalse(state.has("research"))
+
+    def test_pipeline_state_persists_across_instances(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state1 = PipelineState("src-2", cache_dir=Path(tmp))
+            state1.set("research", {"data": {"v": 42}})
+            state2 = PipelineState("src-2", cache_dir=Path(tmp))
+            self.assertTrue(state2.has("research"))
+            self.assertEqual(state2.get("research")["data"]["v"], 42)
+
+    def test_source_id_is_stable_and_distinct(self):
+        result_a = {"target": "a", "project": {"name": "A"}}
+        result_b = {"target": "b", "project": {"name": "B"}}
+        id_a = _source_id(result_a)
+        self.assertEqual(_source_id(result_a), id_a)
+        self.assertNotEqual(_source_id(result_b), id_a)
+
+    # ------------------------------------------------------------------
+    # Pipeline: stage_research
+    # ------------------------------------------------------------------
+
+    def test_stage_research_parses_and_caches(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
-        payload = {"project": result["project"], "evidence": result["evidence"]}
-        prompt = build_promo_user_prompt(payload, platform="xhs")
+        calls = []
 
-        self.assertIn("qualityRubric", PROMO_JSON_SCHEMA)
-        self.assertIn("qualityRubric", prompt)
-        self.assertIn("npx repo-pulse .", build_evidence_brief(payload))
+        def fake_dispatch(messages, config):
+            calls.append(messages)
+            return json.dumps(_research_payload(), ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("research-src", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                out1 = stage_research(result, state, options={"api_key": "k"})
+                out2 = stage_research(result, state)  # should hit cache
+
+        self.assertEqual(out1["stage"], "research")
+        self.assertEqual(out1["data"]["facts"]["core_claim"], "一句话核心主张")
+        self.assertEqual(out1["data"]["strategy"]["recommended_platforms"], ["xiaohongshu", "twitter"])
+        self.assertEqual(out2, out1)
+        self.assertEqual(len(calls), 1, "cached second call should not dispatch")
+
+    def test_stage_research_force_bypasses_cache(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        calls = []
+
+        def fake_dispatch(messages, config):
+            calls.append(messages)
+            return json.dumps(_research_payload(), ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("research-force", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                stage_research(result, state, options={"api_key": "k"})
+                stage_research(result, state, force=True)
+        self.assertEqual(len(calls), 2)
+
+    # ------------------------------------------------------------------
+    # Pipeline: stage_blueprint
+    # ------------------------------------------------------------------
+
+    def test_stage_blueprint_enriches_elements(self):
+        research = {"data": _research_payload()}
+        result = {"project": {"name": "Test"}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("blueprint-src", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat",
+                              lambda m, c: json.dumps(_blueprint_payload(), ensure_ascii=False)):
+                out = stage_blueprint(research, state, result, options={"api_key": "k"})
+
+        elements = out["data"]["elements"]
+        self.assertEqual(out["stage"], "blueprint")
+        self.assertTrue(all(e["editable"] for e in elements))
+        hook = next(e for e in elements if e["id"] == "hook-main")
+        self.assertEqual(len(hook["variants"]), 3, "variants should be capped at 3")
+
+    def test_stage_blueprint_caches(self):
+        research = {"data": _research_payload()}
+        result = {"project": {"name": "Test"}}
+        calls = []
+
+        def fake_dispatch(m, c):
+            calls.append(m)
+            return json.dumps(_blueprint_payload(), ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("blueprint-cache", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                stage_blueprint(research, state, result, options={"api_key": "k"})
+                stage_blueprint(research, state, result)
+        self.assertEqual(len(calls), 1)
+
+    # ------------------------------------------------------------------
+    # Pipeline: blueprint editing
+    # ------------------------------------------------------------------
+
+    def _make_blueprint(self) -> dict:
+        return {
+            "data": {
+                "elements": [
+                    {"id": "a", "content": "A", "variants": ["v1", "v2"]},
+                    {"id": "b", "content": "B", "variants": []},
+                ],
+                "structure": {"alternative_structures": []},
+            }
+        }
+
+    def test_edit_blueprint_updates_content(self):
+        edited = edit_blueprint(self._make_blueprint(), {"a": "new A"})
+        self.assertEqual(edited["data"]["elements"][0]["content"], "new A")
+        self.assertTrue(edited["data"]["elements"][0]["edited"])
+        self.assertTrue(edited["data"]["edit_history"])
+
+    def test_edit_blueprint_select_variant(self):
+        edited = edit_blueprint(self._make_blueprint(), {"_selectVariant": {"a": 1}})
+        self.assertEqual(edited["data"]["elements"][0]["content"], "v2")
+        self.assertEqual(edited["data"]["elements"][0]["selected_variant"], 1)
+
+    def test_edit_blueprint_variant_out_of_range_is_noop(self):
+        edited = edit_blueprint(self._make_blueprint(), {"_selectVariant": {"a": 9}})
+        self.assertEqual(edited["data"]["elements"][0]["content"], "A")
+
+    def test_edit_blueprint_reorder(self):
+        edited = edit_blueprint(self._make_blueprint(), {"_reorder": ["b", "a"]})
+        self.assertEqual([e["id"] for e in edited["data"]["elements"]], ["b", "a"])
+
+    def test_edit_blueprint_remove_element(self):
+        edited = edit_blueprint(self._make_blueprint(), {"_removeElement": "a"})
+        self.assertEqual([e["id"] for e in edited["data"]["elements"]], ["b"])
+
+    def test_edit_blueprint_add_element(self):
+        edited = edit_blueprint(self._make_blueprint(), {
+            "_addElement": {"id": "c", "content": "C", "type": "story"}
+        })
+        ids = [e["id"] for e in edited["data"]["elements"]]
+        self.assertIn("c", ids)
+        self.assertTrue(next(e for e in edited["data"]["elements"] if e["id"] == "c")["editable"])
+
+    def test_edit_blueprint_set_structure(self):
+        bp = {
+            "data": {
+                "elements": [
+                    {"id": "hook", "content": "H"},
+                    {"id": "story", "content": "S"},
+                    {"id": "cta", "content": "C"},
+                ],
+                "structure": {
+                    "alternative_structures": [
+                        {"name": "故事型", "order": ["hook", "story", "cta"]},
+                    ],
+                },
+            }
+        }
+        edited = edit_blueprint(bp, {"_setStructure": "故事型"})
+        self.assertEqual([e["id"] for e in edited["data"]["elements"]], ["hook", "story", "cta"])
+
+    def test_preview_blueprint_markdown(self):
+        blueprint = {
+            "data": {
+                "source": {"project_name": "Test"},
+                "positioning": {"one_liner": "定位"},
+                "elements": [
+                    {"label": "Hook", "content": "Hello", "variants": []},
+                    {"label": "Empty", "content": "", "variants": []},
+                ],
+                "metrics": {"estimated_read_time": "30s", "emotion_profile": "neutral"},
+            }
+        }
+        out = preview_blueprint(blueprint)
+        self.assertIn("# Test", out)
+        self.assertIn("**定位**: 定位", out)
+        self.assertIn("## Hook", out)
+        self.assertIn("Hello", out)
+        self.assertNotIn("## Empty", out)
+
+    def test_preview_blueprint_plain_format(self):
+        blueprint = {
+            "data": {
+                "elements": [{"content": "First"}, {"content": "Second"}],
+            }
+        }
+        out = preview_blueprint(blueprint, format="plain")
+        self.assertEqual(out, "First\n\nSecond")
+
+    # ------------------------------------------------------------------
+    # Pipeline: stage_produce
+    # ------------------------------------------------------------------
+
+    def test_stage_produce_generates_each_platform(self):
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"label": "Hook", "content": "Hello"}]}}
+        research = {"data": {}}
+
+        def fake_dispatch(messages, config):
+            return json.dumps({"platform": "x", "markdown": "content", "hashtags": []},
+                              ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("produce-src", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                out = stage_produce(
+                    blueprint, research, state, options={"api_key": "k"},
+                    platforms=["xiaohongshu", "twitter"], parallel=False,
+                )
+
+        self.assertEqual(out["stage"], "produce")
+        self.assertIn("xiaohongshu", out["data"])
+        self.assertIn("twitter", out["data"])
+        self.assertEqual(out["platforms"], ["xiaohongshu", "twitter"])
+
+    def test_stage_produce_caches(self):
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"label": "Hook", "content": "Hello"}]}}
+        research = {"data": {}}
+        calls = []
+
+        def fake_dispatch(m, c):
+            calls.append(m)
+            return json.dumps({"markdown": "x"}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("produce-cache", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                stage_produce(blueprint, research, state, options={"api_key": "k"},
+                              platforms=["twitter"], parallel=False)
+                stage_produce(blueprint, research, state, platforms=["twitter"], parallel=False)
+        self.assertEqual(len(calls), 1)
+
+    # ------------------------------------------------------------------
+    # Pipeline: run_pipeline
+    # ------------------------------------------------------------------
+
+    def test_run_pipeline_stops_after_research(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        with patch.object(pipeline, "dispatch_chat",
+                          lambda m, c: json.dumps(_research_payload(), ensure_ascii=False)):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = PipelineState("pipe-research", cache_dir=Path(tmp))
+                outputs = run_pipeline(result, options={"api_key": "k"},
+                                       stop_after="research", state=state)
+        self.assertIn("research", outputs)
+        self.assertNotIn("blueprint", outputs)
+
+    def test_run_pipeline_full(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+
+        def fake_dispatch(messages, config):
+            user = messages[-1]["content"]
+            if "research" in user or "推广策略" in user:
+                return json.dumps(_research_payload(), ensure_ascii=False)
+            if "Blueprint" in user or "内容元素" in user:
+                return json.dumps(_blueprint_payload(), ensure_ascii=False)
+            return json.dumps({"platform": "x", "markdown": "content"}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("pipe-full", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                outputs = run_pipeline(result, options={"api_key": "k"}, state=state)
+
+        self.assertIn("research", outputs)
+        self.assertIn("blueprint", outputs)
+        self.assertIn("produce", outputs)
+        self.assertTrue(outputs["produce"]["data"])
 
     # ------------------------------------------------------------------
     # Optimize
@@ -343,7 +652,6 @@ class PythonCoreTest(unittest.TestCase):
 
             self.assertIn("INDEX.md", manifest["generated"])
             self.assertIn("evidence-summary.md", manifest["generated"])
-            # Without AI, a placeholder draft is written
             self.assertIn("promo-draft.md", manifest["generated"])
             self.assertEqual(manifest["promoSource"], "unavailable")
 
@@ -358,9 +666,33 @@ class PythonCoreTest(unittest.TestCase):
 
             self.assertEqual(manifest["promoSource"], "ai")
             self.assertEqual(manifest["promoModel"], "test-model")
-            # Filename derived from AI output key ("xiaohongshu" → "promo-xiaohongshu.md")
             xhs = (output_dir / "promo-xiaohongshu.md").read_text(encoding="utf-8")
             self.assertIn("AI 小红书正文", xhs)
+
+    def test_optimize_with_images_false_skips_image_generation(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "launch-assets"
+            manifest = run_optimize(result, cwd=FIXTURES, output_dir=output_dir, generate_images=False)
+        self.assertIn("INDEX.md", manifest["generated"])
+        self.assertEqual(manifest.get("images"), [])
+
+    def test_optimize_with_images_true_and_no_key_skips_ai_image(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        env_backup = {k: os.environ.pop(k, None) for k in [
+            "PROMOAGENT_IMAGE_API_KEY", "OPENAI_API_KEY",
+            "PROMOAGENT_MODELSCOPE_API_KEY", "PROMOAGENT_API_KEY", "MODELSCOPE_API_KEY",
+        ]}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                output_dir = Path(tmp) / "launch-assets"
+                manifest = run_optimize(result, cwd=FIXTURES, output_dir=output_dir, generate_images=True)
+            self.assertIn("INDEX.md", manifest["generated"])
+            self.assertIsInstance(manifest.get("images"), list)
+        finally:
+            for k, v in env_backup.items():
+                if v is not None:
+                    os.environ[k] = v
 
     # ------------------------------------------------------------------
     # CLI
@@ -378,82 +710,63 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(json.loads(explicit.stdout)["project"]["name"], "repo-pulse")
         self.assertEqual(json.loads(legacy.stdout)["project"]["name"], "repo-pulse")
 
-    def test_python_cli_context_and_prompt_notes(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            notes = Path(tmp) / "notes.md"
-            notes.write_text("Use a dry maintainer voice.", encoding="utf-8")
-            result = subprocess.run(
-                [
-                    sys.executable, "-m", "promoagent", "promote",
-                    str(FIXTURES / "healthy-repo"),
-                    "--context", str(notes),
-                    "--prompt-note", "Avoid hype.",
-                    "--prompt-preset", "launch",
-                    "--json",
-                ],
-                cwd=ROOT, text=True, capture_output=True, check=True,
-            )
+    def test_python_cli_draft_help_lists_stages(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "promoagent", "draft", "--help"],
+            cwd=ROOT, text=True, capture_output=True, check=True,
+        )
+        self.assertIn("--stage", result.stdout)
+        self.assertIn("blueprint", result.stdout)
 
-        payload = json.loads(result.stdout)
-        self.assertIn("Avoid hype.", payload["user"])
-        self.assertIn("Use a dry maintainer voice.", payload["user"])
+    def test_python_cli_serve_reports_unavailable(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "promoagent", "serve"],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("draft", result.stderr.lower() + result.stdout.lower())
 
     def test_promoagent_bin_delegates_to_python_cli(self):
         result = subprocess.run(
             [str(ROOT / "bin" / "promoagent"), "--version"],
             cwd=ROOT, text=True, capture_output=True, check=True,
         )
-        self.assertEqual(result.stdout.strip(), "0.3.0")
-
-    def test_python_cli_ai_promote_and_optimize_with_mock_server(self):
-        server = MockChatServer(sample_ai_content())
-        server.start()
-        env = {**os.environ, "PROMOAGENT_API_KEY": "test-key"}
-        try:
-            promoted = subprocess.run(
-                [
-                    sys.executable, "-m", "promoagent", "promote",
-                    str(FIXTURES / "healthy-repo"),
-                    "--ai", "--json", "--base-url", server.base_url, "--model", "test-model",
-                ],
-                cwd=ROOT, env=env, text=True, capture_output=True, check=True,
-            )
-            with tempfile.TemporaryDirectory() as tmp:
-                output_dir = Path(tmp) / "launch-assets"
-                subprocess.run(
-                    [
-                        sys.executable, "-m", "promoagent", "optimize",
-                        str(FIXTURES / "healthy-repo"),
-                        "--ai", "--base-url", server.base_url, "--model", "test-model",
-                        "--output", str(output_dir),
-                    ],
-                    cwd=ROOT, env=env, text=True, capture_output=True, check=True,
-                )
-                xhs = (output_dir / "promo-xiaohongshu.md").read_text(encoding="utf-8")
-        finally:
-            server.stop()
-
-        self.assertEqual(json.loads(promoted.stdout)["ai"]["content"]["positioning"], "测试定位")
-        self.assertIn("AI 小红书正文", xhs)
+        self.assertEqual(result.stdout.strip(), "0.4.0")
 
     # ------------------------------------------------------------------
     # .env loading
     # ------------------------------------------------------------------
 
+    def test_dotenv_loads_keys_not_already_in_environ(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("S2L_TEST_KEY=hello\nS2L_ALREADY_SET=original\n", encoding="utf-8")
+            os.environ["S2L_ALREADY_SET"] = "original"
+            os.environ.pop("S2L_TEST_KEY", None)
+            import promoagent
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                promoagent._load_dotenv()
+            finally:
+                os.chdir(original_cwd)
+            self.assertEqual(os.environ.get("S2L_TEST_KEY"), "hello")
+            self.assertEqual(os.environ.get("S2L_ALREADY_SET"), "original")
+            os.environ.pop("S2L_TEST_KEY", None)
+            os.environ.pop("S2L_ALREADY_SET", None)
+
     # ------------------------------------------------------------------
-    # Two-stage: category detection + example finding
+    # Category detection + example finding
     # ------------------------------------------------------------------
 
     def test_detect_category_restaurant(self):
         result = analyze_free_text("上海阿强火锅，主打麻辣鲜香，人均80元")
-        # Without AI key, falls back to heuristic — just check it returns a non-empty string
         category = detect_category(result)
         self.assertIsInstance(category, str)
         self.assertTrue(len(category) > 0)
 
     def test_detect_category_tech(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
-        # Local repo → heuristic returns 科技/开源项目
         category = detect_category(result)
         self.assertIsInstance(category, str)
         self.assertTrue(len(category) > 0)
@@ -461,53 +774,21 @@ class PythonCoreTest(unittest.TestCase):
     def test_detect_category_github(self):
         result = {"source": "github", "project": {"name": "whisper", "description": "ASR"}, "evidence": {}, "target": ""}
         category = detect_category(result)
-        # GitHub source → heuristic → 科技/开源项目
         self.assertIn("科技", category)
 
-    def test_format_examples_for_prompt(self):
-        examples = ["这是示例一的内容，非常精彩", "这是示例二，风格不同"]
-        formatted = format_examples_for_prompt(examples, platform="xhs")
-        self.assertIn("参考示例", formatted)
-        self.assertIn("示例 1", formatted)
-        self.assertIn("示例 2", formatted)
-        self.assertIn("不要复制内容", formatted)
-
-    def test_format_examples_empty(self):
-        self.assertEqual(format_examples_for_prompt([]), "")
-
     def test_find_examples_no_key_returns_empty_or_ai(self):
-        """Without API keys, find_examples should return empty list gracefully."""
         result = analyze_free_text("上海火锅店推广")
-        # Remove all API keys for this test
         env_backup = {k: os.environ.pop(k, None) for k in [
             "TAVILY_API_KEY", "PROMOAGENT_API_KEY", "PROMOAGENT_MODELSCOPE_API_KEY",
-            "OPENAI_API_KEY", "MODELSCOPE_API_KEY"
+            "OPENAI_API_KEY", "MODELSCOPE_API_KEY",
         ]}
         try:
             examples = find_examples(result, platform="xhs", verbose=False)
-            # Without any API key, should return empty list (not crash)
             self.assertIsInstance(examples, list)
         finally:
             for k, v in env_backup.items():
                 if v is not None:
                     os.environ[k] = v
-
-    def test_examples_injected_in_prompt(self):
-        result = analyze_target("healthy-repo", cwd=FIXTURES)
-        payload = {"project": result["project"], "evidence": result["evidence"]}
-        examples = ["示例内容1：这是一个优质的小红书帖子示例", "示例内容2：另一个不同风格的示例"]
-        prompt = build_promo_user_prompt(payload, platform="xhs", examples=examples)
-        self.assertIn("参考示例", prompt)
-        self.assertIn("示例内容1", prompt)
-        self.assertIn("不要复制内容", prompt)
-
-    def test_examples_not_injected_when_empty(self):
-        result = analyze_target("healthy-repo", cwd=FIXTURES)
-        payload = {"project": result["project"], "evidence": result["evidence"]}
-        prompt_without = build_promo_user_prompt(payload, platform="xhs", examples=[])
-        prompt_with_none = build_promo_user_prompt(payload, platform="xhs", examples=None)
-        self.assertNotIn("参考示例", prompt_without)
-        self.assertNotIn("参考示例", prompt_with_none)
 
     # ------------------------------------------------------------------
     # Image generation
@@ -515,54 +796,136 @@ class PythonCoreTest(unittest.TestCase):
 
     def test_build_image_prompt_contains_project_info(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
-        prompt = build_image_prompt(result, platform="xhs")
+        prompt = build_image_prompt(result, platform="xhs", model="dall-e-3")
         self.assertIn("repo-pulse", prompt)
         self.assertIn("3:4", prompt)
         self.assertIn("poster", prompt)
+        self.assertIn("ad-ready campaign visual", prompt)
+        self.assertIn("Creative skill:", prompt)
+        self.assertIn("PROMO_RENDER_SPEC", prompt)
+        self.assertIn("Ad copy to reserve space", prompt)
+        self.assertIn("hard subject-exclusion", prompt)
+        self.assertIn("separate local typography overlay", prompt)
+
+    def test_image_skills_are_listed_and_resolved(self):
+        self.assertIn("b2b-saas", list_image_skills())
+        self.assertEqual(resolve_image_skill(requested="food", recommendation_kind="general")["name"], "food-local")
+        self.assertEqual(resolve_image_skill(requested="unknown", recommendation_kind="product")["name"], "product-hero")
+
+    def test_build_image_prompt_uses_explicit_creative_skill(self):
+        result = analyze_free_text("LuminaDesk 护眼桌面灯，三档色温，金属机身，售价299元")
+        prompt = build_image_prompt(result, platform="wechat", skill="product-hero", model="dall-e-3")
+        self.assertIn("Creative skill: product-hero", prompt)
+        self.assertIn("product-render-config", prompt)
+        self.assertIn("reference_route", prompt)
+        self.assertIn("Product & Food", prompt)
+        self.assertIn("fake brand logo", prompt)
+
+    def test_build_image_prompt_auto_uses_xhs_lifestyle_skill(self):
+        result = analyze_free_text("一个适合自由职业者的时间管理服务，帮助整理客户项目和报价")
+        prompt = build_image_prompt(result, platform="xhs", skill="auto", model="dall-e-3")
+        self.assertIn("Creative skill: xhs-lifestyle", prompt)
+        self.assertIn("Xiaohongshu cover", prompt)
+        self.assertIn("first glance", prompt)
+        self.assertIn("Ad-tool benchmark", prompt)
 
     def test_build_image_prompt_platform_dims(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
-        xhs_prompt = build_image_prompt(result, platform="xhs")
-        wechat_prompt = build_image_prompt(result, platform="wechat")
+        xhs_prompt = build_image_prompt(result, platform="xhs", model="dall-e-3")
+        wechat_prompt = build_image_prompt(result, platform="wechat", model="dall-e-3")
         self.assertIn("3:4", xhs_prompt)
         self.assertIn("1:1", wechat_prompt)
 
+    def test_build_image_prompt_chinese_model_branch(self):
+        """Chinese image models (e.g. Qwen) get a Chinese-language prompt."""
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        prompt = build_image_prompt(result, platform="xhs", model="Qwen/Qwen-Image")
+        self.assertIn("小红书封面", prompt)
+        self.assertIn("核心要求", prompt)
+        self.assertIn("竖版3:4比例", prompt)
+        # Chinese branch must NOT emit the English skill/render-spec block
+        self.assertNotIn("PROMO_RENDER_SPEC", prompt)
+        self.assertNotIn("Creative skill:", prompt)
+
+    def test_build_image_prompt_adapts_to_restaurant_recommendation(self):
+        result = analyze_free_text("上海阿强火锅，主打麻辣鲜香，人均80元，位于静安区南京西路")
+        prompt = build_image_prompt(result, platform="xhs", model="dall-e-3")
+        self.assertIn("restaurant/local lifestyle recommendation", prompt)
+        self.assertIn("sensory appeal", prompt)
+        self.assertIn("Scene/backdrop", prompt)
+        self.assertIn("Visual density", prompt)
+        self.assertNotIn("open source software", prompt)
+        self.assertNotIn("modern tech editorial", prompt)
+
+    def test_build_image_prompt_adapts_to_event_recommendation(self):
+        result = analyze_free_text("周末 AI 创业者线下沙龙，上海徐汇，适合产品经理和独立开发者报名")
+        prompt = build_image_prompt(result, platform="linkedin", model="dall-e-3")
+        self.assertIn("event/activity recommendation", prompt)
+        self.assertIn("why attend", prompt)
+        self.assertIn("wide LinkedIn banner", prompt)
+
+    def test_build_image_prompt_adapts_to_product_recommendation(self):
+        result = analyze_free_text("LuminaDesk 护眼桌面灯，三档色温，金属机身，售价299元")
+        prompt = build_image_prompt(result, platform="wechat", model="dall-e-3")
+        self.assertIn("consumer product recommendation", prompt)
+        self.assertIn("product desirability", prompt)
+        self.assertIn("one clear hero product", prompt)
+        self.assertIn("square 1:1 card", prompt)
+        self.assertIn("upper-left 42-48% wide copy-safe zone", prompt)
+        self.assertIn("Avoid placing the subject", prompt)
+
+    def test_build_image_prompt_adapts_to_research_recommendation(self):
+        result = analyze_free_text("一篇关于推荐系统冷启动问题的研究论文，包含实验、数据集和方法对比")
+        prompt = build_image_prompt(result, platform="zhihu", model="dall-e-3")
+        self.assertIn("research/document recommendation", prompt)
+        self.assertIn("method clarity", prompt)
+        self.assertIn("research-diagram-grammar", prompt)
+        self.assertIn("diagram_grammar", prompt)
+        self.assertIn("senior art director", prompt)
+        self.assertIn("wide 16:9 header image", prompt)
+
+    def test_image_brief_resolves_ad_overlay_fields(self):
+        result = analyze_free_text("一款适合夜间学习的护眼桌面灯，售价299元")
+        brief = image_brief(result, options={
+            "title": "今晚桌面更舒服",
+            "subtitle": "三档色温，减少眩光",
+            "cta": "立即了解",
+            "badges": "护眼,金属机身",
+        }, env={})
+        self.assertEqual(brief["title"], "今晚桌面更舒服")
+        self.assertEqual(brief["cta"], "立即了解")
+        self.assertIn("护眼", brief["badges"])
+        self.assertTrue(brief["textOverlay"])
+
+    def test_apply_text_overlay_writes_ad_copy(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cover.png"
+            Image.new("RGB", (900, 1200), (230, 224, 214)).save(path)
+            before = path.read_bytes()
+
+            changed = apply_text_overlay(path, platform="xhs", brief={
+                "title": "今晚桌面更舒服",
+                "subtitle": "三档色温，减少眩光",
+                "cta": "立即了解",
+                "badges": ["护眼", "金属机身"],
+                "textOverlay": True,
+            })
+
+            self.assertTrue(changed)
+            self.assertNotEqual(path.read_bytes(), before)
+
     def test_fetch_readme_images_returns_empty_when_no_urls(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
-        # healthy-repo README has no external image URLs — should return empty list
         with tempfile.TemporaryDirectory() as tmp:
             saved = fetch_readme_images(result, Path(tmp) / "images")
         self.assertIsInstance(saved, list)
 
-    def test_optimize_with_images_false_skips_image_generation(self):
-        result = analyze_target("healthy-repo", cwd=FIXTURES)
-        with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "launch-assets"
-            manifest = run_optimize(result, cwd=FIXTURES, output_dir=output_dir, generate_images=False)
-        self.assertIn("INDEX.md", manifest["generated"])
-        self.assertEqual(manifest.get("images"), [])
-
-    def test_optimize_with_images_true_and_no_key_skips_ai_image(self):
-        """When --image is set but no API key, README images are attempted but AI image is skipped."""
-        result = analyze_target("healthy-repo", cwd=FIXTURES)
-        # Remove any API key from environment for this test
-        env_backup = {k: os.environ.pop(k, None) for k in [
-            "PROMOAGENT_MODELSCOPE_API_KEY", "PROMOAGENT_API_KEY", "MODELSCOPE_API_KEY"
-        ]}
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                output_dir = Path(tmp) / "launch-assets"
-                manifest = run_optimize(result, cwd=FIXTURES, output_dir=output_dir, generate_images=True)
-            # Should not crash; images list may be empty (no readme images in fixture)
-            self.assertIn("INDEX.md", manifest["generated"])
-            self.assertIsInstance(manifest.get("images"), list)
-        finally:
-            for k, v in env_backup.items():
-                if v is not None:
-                    os.environ[k] = v
-
     def test_generate_platform_images_with_mock_modelscope(self):
-        """Full image generation flow with a mock ModelScope server."""
         import base64
         png_bytes = base64.b64decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -578,21 +941,21 @@ class PythonCoreTest(unittest.TestCase):
                     output_dir,
                     options={
                         "base_url": server.base_url,
-                        "api_key": "test-key",   # api_key in options → picked up by image_config
+                        "api_key": "test-key",
                         "model": "test-model",
+                        "skill": "b2b-saas",
                         "poll_interval_ms": 10,
                         "timeout_ms": 5000,
                     },
                 )
-                # Check paths while temp dir still exists
                 ai_images = [img for img in images if img.get("provider") == "modelscope"]
                 self.assertTrue(len(ai_images) >= 1)
                 self.assertTrue(Path(ai_images[0]["outputPath"]).exists())
+                self.assertEqual(ai_images[0]["skill"], "b2b-saas")
         finally:
             server.stop()
 
     def test_generate_openai_image_with_b64_response(self):
-        """GPT Image 2 synchronous API: POST → b64_json response → save file."""
         import base64
         png_bytes = base64.b64decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -620,7 +983,47 @@ class PythonCoreTest(unittest.TestCase):
             server.stop()
 
         self.assertEqual(meta["provider"], "openai")
-        self.assertEqual(meta["size"], "1024x1536")   # xhs portrait size
+        self.assertEqual(meta["size"], "1024x1536")
+
+    def test_image_config_uses_image_specific_openai_env(self):
+        env = {
+            "PROMOAGENT_IMAGE_API_KEY": "image-key",
+            "PROMOAGENT_IMAGE_BASE_URL": "https://image.example.test/v1",
+            "PROMOAGENT_API_KEY": "text-key",
+            "PROMOAGENT_BASE_URL": "https://text.example.test/v1",
+            "PROMOAGENT_IMAGE_MODEL": "gpt-image-2",
+        }
+        cfg = image_config(env=env)
+        self.assertEqual(cfg["apiKey"], "image-key")
+        self.assertEqual(cfg["baseUrl"], "https://image.example.test/v1")
+        self.assertEqual(cfg["model"], "gpt-image-2")
+
+    def test_generate_platform_images_with_custom_openai_platforms(self):
+        import base64
+        png_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        )
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        server = MockOpenAIImageServer(png_bytes)
+        server.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                output_dir = Path(tmp) / "launch-assets"
+                images = generate_platform_images(
+                    result,
+                    output_dir,
+                    options={
+                        "base_url": server.base_url,
+                        "api_key": "test-key",
+                        "model": "gpt-image-2",
+                        "platforms": "twitter,linkedin",
+                    },
+                )
+                names = {Path(img["outputPath"]).name for img in images if img.get("provider") == "openai"}
+                self.assertIn("cover-twitter.png", names)
+                self.assertIn("cover-linkedin.png", names)
+        finally:
+            server.stop()
 
     def test_openai_model_detection(self):
         from promoagent.image import _is_openai_model
@@ -628,70 +1031,6 @@ class PythonCoreTest(unittest.TestCase):
         self.assertTrue(_is_openai_model("dall-e-3"))
         self.assertFalse(_is_openai_model("Qwen/Qwen-Image"))
         self.assertFalse(_is_openai_model("stabilityai/stable-diffusion"))
-
-    # ------------------------------------------------------------------
-    # Multi-turn refinement + example comparison
-    # ------------------------------------------------------------------
-
-    def test_refine_content_with_mock_server(self):
-        """refine_content() appends feedback to conversation and calls AI again."""
-        result = analyze_target("healthy-repo", cwd=FIXTURES)
-        server = MockChatServer(sample_ai_content())
-        server.start()
-        try:
-            # Simulate a previous generation result with messages saved
-            previous_result = {
-                "messages": [
-                    {"role": "system", "content": "You are a promo editor."},
-                    {"role": "user", "content": "Generate promo for repo-pulse."},
-                ],
-                "content": sample_ai_content(),
-                "model": "test-model",
-                "baseUrl": server.base_url,
-            }
-            refined = refine_content(
-                previous_result,
-                "小红书那条太广告感了，改得更自然一些",
-                options={"base_url": server.base_url, "api_key": "test-key", "model": "test-model"},
-            )
-        finally:
-            server.stop()
-
-        # Should have extended conversation
-        self.assertIn("content", refined)
-        self.assertIn("messages", refined)
-        msgs = refined["messages"]
-        # Original 2 messages + assistant response + user feedback = 4 messages
-        self.assertGreaterEqual(len(msgs), 4)
-        # Last user message contains the feedback
-        self.assertIn("广告感", msgs[-1]["content"])
-
-    def test_generate_ai_content_saves_messages(self):
-        """generate_ai_content returns messages for subsequent refinement."""
-        result = analyze_target("healthy-repo", cwd=FIXTURES)
-        server = MockChatServer(sample_ai_content())
-        server.start()
-        try:
-            ai_result = generate_ai_content(result, platform="xhs", options={
-                "base_url": server.base_url,
-                "api_key": "test-key",
-                "model": "test-model",
-            }, compare_with_examples=False)
-        finally:
-            server.stop()
-
-        self.assertIn("messages", ai_result)
-        self.assertIsInstance(ai_result["messages"], list)
-        self.assertGreater(len(ai_result["messages"]), 0)
-
-    def test_refine_raises_without_context(self):
-        """refine_content raises ValueError when no messages in previous result."""
-        with self.assertRaises(ValueError):
-            refine_content(
-                {"content": {}, "messages": []},
-                "改一下",
-                options={"api_key": "test-key"},
-            )
 
     # ------------------------------------------------------------------
     # Platform publishers
@@ -710,7 +1049,6 @@ class PythonCoreTest(unittest.TestCase):
         env = {
             "TELEGRAM_BOT_TOKEN": "123:TOKEN",
             "TELEGRAM_CHAT_ID": "@channel",
-            # Twitter NOT configured
         }
         pubs = available_publishers(env)
         self.assertIn("telegram", pubs)
@@ -740,12 +1078,13 @@ class PythonCoreTest(unittest.TestCase):
         }
         try:
             pub = TelegramPublisher(env)
-            pub._BASE_URL = server.base_url  # redirect to mock
-            # Override the URL in _post by patching
+            pub._BASE_URL = server.base_url
             original_post = pub._post
+
             def patched_post(url, body, headers=None):
                 new_url = url.replace("https://api.telegram.org", server.base_url)
                 return original_post(new_url, body, headers)
+
             pub._post = patched_post
             result = pub.publish("测试发布内容")
         finally:
@@ -755,25 +1094,26 @@ class PythonCoreTest(unittest.TestCase):
 
     def test_bluesky_publisher_requires_handle_and_password(self):
         pub = BlueskyPublisher({"BLUESKY_HANDLE": "test.bsky.social"})
-        self.assertFalse(pub.is_configured())  # missing password
+        self.assertFalse(pub.is_configured())
 
-    def test_dotenv_loads_keys_not_already_in_environ(self):
+    def test_load_content_from_assets_resolves_alias(self):
+        """fill/publish should find promo-xiaohongshu.md when asked for 'xhs'."""
+        from promoagent.publish import load_content_from_assets
         with tempfile.TemporaryDirectory() as tmp:
-            env_file = Path(tmp) / ".env"
-            env_file.write_text("S2L_TEST_KEY=hello\nS2L_ALREADY_SET=original\n", encoding="utf-8")
-            os.environ["S2L_ALREADY_SET"] = "original"
-            os.environ.pop("S2L_TEST_KEY", None)
-            import promoagent
-            original_cwd = Path.cwd()
-            try:
-                os.chdir(tmp)
-                promoagent._load_dotenv()
-            finally:
-                os.chdir(original_cwd)
-            self.assertEqual(os.environ.get("S2L_TEST_KEY"), "hello")
-            self.assertEqual(os.environ.get("S2L_ALREADY_SET"), "original")
-            os.environ.pop("S2L_TEST_KEY", None)
-            os.environ.pop("S2L_ALREADY_SET", None)
+            out = Path(tmp) / "launch-assets"
+            out.mkdir()
+            (out / "promo-xiaohongshu.md").write_text("XHS content", encoding="utf-8")
+            (out / "promo-twitter.md").write_text("Twitter content", encoding="utf-8")
+            # Alias 'xhs' must resolve to the xiaohongshu file, not fall back to
+            # the first promo-*.md (which would be twitter alphabetically).
+            self.assertEqual(load_content_from_assets(out, "xhs"), "XHS content")
+            self.assertEqual(load_content_from_assets(out, "x"), "Twitter content")
+
+    def test_load_content_from_assets_missing_raises(self):
+        from promoagent.publish import load_content_from_assets
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError):
+                load_content_from_assets(Path(tmp), "xiaohongshu")
 
     # ------------------------------------------------------------------
     # Cache
@@ -782,49 +1122,47 @@ class PythonCoreTest(unittest.TestCase):
     def test_cache_set_and_get(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp) / "cache"
-            key = ("test", "key")
             data = {"value": 42, "nested": {"list": [1, 2, 3]}}
-
-            # Set and get
-            set(*key, data=data, cache_dir=cache_dir)
-            cached = get(*key, cache_dir=cache_dir)
-            self.assertEqual(cached, data)
+            cache.set("test", "key", data=data, cache_dir=cache_dir)
+            self.assertEqual(cache.get("test", "key", cache_dir=cache_dir), data)
 
     def test_cache_expires_after_ttl(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp) / "cache"
-            key = ("expiring", "key")
-
-            set("expiring", "key", data="test", cache_dir=cache_dir)
-            # Should be expired with 0 TTL
-            cached = get("expiring", "key", cache_dir=cache_dir, ttl_seconds=0)
+            cache.set("expiring", "key", data="test", cache_dir=cache_dir)
+            cached = cache.get("expiring", "key", cache_dir=cache_dir, ttl_seconds=0)
             self.assertIsNone(cached)
 
     def test_cache_clear_removes_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp) / "cache"
-            set("a", "b", data="1", cache_dir=cache_dir)
-            set("a", "c", data="2", cache_dir=cache_dir)
-
-            cleared = clear("a", cache_dir=cache_dir)
-            self.assertEqual(cleared, 2)
+            cache.set("a", "b", data="1", cache_dir=cache_dir)
+            cache.set("a", "c", data="2", cache_dir=cache_dir)
+            self.assertEqual(cache.clear("a", cache_dir=cache_dir), 2)
 
     def test_cache_stats_reports_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp) / "cache"
-            set("test", "1", data="a", cache_dir=cache_dir)
-            set("test", "2", data="b", cache_dir=cache_dir)
-
-            stats = get_stats(cache_dir=cache_dir)
+            cache.set("test", "1", data="a", cache_dir=cache_dir)
+            cache.set("test", "2", data="b", cache_dir=cache_dir)
+            stats = cache.get_stats(cache_dir=cache_dir)
             self.assertEqual(stats["entries"], 2)
             self.assertEqual(stats["valid_entries"], 2)
             self.assertIn("size_human", stats)
 
-    def test_cache_key_generation(self):
-        key1 = _make_key("github", "repos", "openai/whisper")
-        key2 = _make_key("github", "repos", "openai/whisper")
-        key3 = _make_key("github", "repos", "anthropic/claude")
+    def test_cache_stats_reports_empty_missing_cache_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stats = cache.get_stats(cache_dir=Path(tmp) / "missing-cache")
+            self.assertEqual(stats["entries"], 0)
+            self.assertEqual(stats["valid_entries"], 0)
+            self.assertEqual(stats["expired_entries"], 0)
+            self.assertIn("size_human", stats)
+            self.assertIn("cache_dir", stats)
 
+    def test_cache_key_generation(self):
+        key1 = cache._make_key("github", "repos", "openai/whisper")
+        key2 = cache._make_key("github", "repos", "openai/whisper")
+        key3 = cache._make_key("github", "repos", "anthropic/claude")
         self.assertEqual(key1, key2)
         self.assertNotEqual(key1, key3)
 
@@ -834,11 +1172,8 @@ class PythonCoreTest(unittest.TestCase):
 
     def test_logger_levels(self):
         logger = Logger("test", level=LogLevel.WARNING)
-
-        # Debug and info should not be logged
         self.assertFalse(logger._should_log(LogLevel.DEBUG))
         self.assertFalse(logger._should_log(LogLevel.INFO))
-        # Warning and above should be logged
         self.assertTrue(logger._should_log(LogLevel.WARNING))
         self.assertTrue(logger._should_log(LogLevel.ERROR))
 
@@ -850,11 +1185,9 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("key='value'", output)
 
     def test_logger_json_format(self):
-        import json
         logger = Logger("test")
         logger._use_json = True
         output = logger._format_json(LogLevel.INFO, "test message", count=42)
-
         parsed = json.loads(output)
         self.assertEqual(parsed["level"], "INFO")
         self.assertEqual(parsed["message"], "test message")
@@ -862,18 +1195,13 @@ class PythonCoreTest(unittest.TestCase):
 
     def test_log_timer_success(self):
         import time
-        logger = get_logger("test")
-
         with LogTimer("test_operation", items=10):
-            time.sleep(0.01)  # 10ms
-
-        # Timer should complete without error
+            time.sleep(0.01)
 
     def test_log_duration(self):
         import time
         start = time.time()
         time.sleep(0.01)
-        # Should not raise
         log_duration("quick_op", start, items=10)
 
 
@@ -960,7 +1288,6 @@ class MockChatServer:
 
 
 class MockTelegramHandler(BaseHTTPRequestHandler):
-    """Simulates Telegram Bot API: POST /botTOKEN/sendMessage → ok response."""
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         self.rfile.read(length)
@@ -989,7 +1316,6 @@ class MockTelegramServer:
 
 
 class MockAnthropicHandler(BaseHTTPRequestHandler):
-    """Simulates Anthropic Messages API: POST /v1/messages → content[0].text."""
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         self.rfile.read(length)
@@ -1022,7 +1348,6 @@ class MockAnthropicServer:
 
 
 class MockGeminiHandler(BaseHTTPRequestHandler):
-    """Simulates Google Gemini generateContent API."""
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         self.rfile.read(length)
@@ -1053,42 +1378,7 @@ class MockGeminiServer:
         self.httpd.server_close()
 
 
-class MockOllamaHandler(BaseHTTPRequestHandler):
-    """Simulates Ollama /api/chat API."""
-    def do_POST(self):  # noqa: N802
-        length = int(self.headers.get("Content-Length", "0"))
-        self.rfile.read(length)
-        body = json.dumps({
-            "message": {"role": "assistant", "content": self.server.response_text},
-            "done": True,
-        }).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-    def log_message(self, format, *args): return  # noqa: A002
-
-
-class MockOllamaServer:
-    def __init__(self, response_text: str):
-        self.httpd = HTTPServer(("127.0.0.1", 0), MockOllamaHandler)
-        self.httpd.response_text = response_text
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
-    @property
-    def base_url(self):
-        host, port = self.httpd.server_address
-        return f"http://{host}:{port}"
-    def start(self): self.thread.start()
-    def stop(self):
-        self.httpd.shutdown()
-        self.thread.join(timeout=5)
-        self.httpd.server_close()
-
-
 class MockOpenAIImageHandler(BaseHTTPRequestHandler):
-    """Simulates OpenAI Images API: POST → b64_json response (synchronous)."""
-
     def do_POST(self):  # noqa: N802
         import base64
         length = int(self.headers.get("Content-Length", "0"))
@@ -1128,15 +1418,11 @@ class MockOpenAIImageServer:
 
 
 class MockModelScopeImageHandler(BaseHTTPRequestHandler):
-    """Simulates ModelScope image generation API: submit task → poll → download."""
-
     def do_POST(self):  # noqa: N802
-        # POST /v1/images/generations → task_id
         self._write_json({"task_id": "img-task-1"})
 
     def do_GET(self):  # noqa: N802
         if "/tasks/" in self.path:
-            # Poll → SUCCEED with image URL
             self._write_json({
                 "task_status": "SUCCEED",
                 "output_images": [f"{self.server.base_url}/img.png"],
@@ -1226,3 +1512,7 @@ class MockGitHubServer:
         self.httpd.shutdown()
         self.thread.join(timeout=5)
         self.httpd.server_close()
+
+
+if __name__ == "__main__":
+    unittest.main()

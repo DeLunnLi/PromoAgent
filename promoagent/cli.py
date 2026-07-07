@@ -9,13 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .ai import generate_ai_content, has_ai_key, refine_content
 from .analyzer import analyze_target
-from .optimize import run_optimize
-from .promo_prompts import build_evidence_brief, build_promo_payload, build_promo_system_prompt, build_promo_user_prompt, expand_presets
-from .ui import console, print_banner, print_success, print_error, print_info, print_tip, print_code, print_analysis_result, print_promo_result, print_optimize_manifest, print_platforms_table, progress_spinner
-
-_SESSION_FILE = ".promoagent-session.json"
+from .ui import console, print_banner, print_success, print_error, print_warning, print_info, print_tip, print_code, print_analysis_result, print_promo_result, print_optimize_manifest, print_platforms_table, progress_spinner
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,13 +23,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         cmd_map = {
-            "promote": _run_promote, "optimize": _run_optimize, "refine": _run_refine,
             "serve": _run_serve, "publish": _run_publish_cmd, "fill": _run_fill,
             "cache": _run_cache, "platforms": _run_platforms, "setup": _run_setup, "doctor": _run_doctor,
+            "draft": _run_draft,
         }
         return cmd_map.get(args.command, _run_analyze)(args)
-    except Exception as error:
+    except (RuntimeError, ValueError, FileNotFoundError) as error:
         print_error(str(error))
+        return 1
+    except Exception as error:
+        # Catch-all for unexpected errors
+        print_error(f"Unexpected error: {error}")
         if os.environ.get("DEBUG") or os.environ.get("PROMOAGENT_DEBUG"):
             console.print_exception()
         return 1
@@ -51,29 +50,21 @@ def _build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--json", action="store_true", help="Print JSON output.")
     analyze.add_argument("-o", "--output", help="Write to file.")
 
-    # promote
-    promote = sub.add_parser("promote", help="Generate promotional content.")
-    _add_target(promote)
-    promote.add_argument("--platform", default="all", help="Target platform(s).")
-    promote.add_argument("--ai", action="store_true", help="Use AI to generate copy.")
-    promote.add_argument("-i", "--interactive", action="store_true", help="Ask clarifying questions.")
-    promote.add_argument("--no-examples", action="store_true", help="Skip example search.")
-    promote.add_argument("--json", action="store_true", help="Print JSON.")
-    promote.add_argument("-o", "--output", help="Write to file.")
-    _add_ai_options(promote)
-    _add_context_options(promote)
-
-    # optimize
-    optimize = sub.add_parser("optimize", help="Save content to launch-assets/ folder.")
-    _add_target(optimize)
-    optimize.add_argument("--output", "--output-dir", dest="output_dir", default="launch-assets", help="Output directory.")
-    optimize.add_argument("--ai", action="store_true", help="Use AI.")
-    optimize.add_argument("-i", "--interactive", action="store_true", help="Ask questions.")
-    optimize.add_argument("--no-examples", action="store_true", help="Skip examples.")
-    optimize.add_argument("--image", action="store_true", help="Generate cover images.")
-    optimize.add_argument("--image-model", dest="image_model", help="Image model override.")
-    _add_ai_options(optimize)
-    _add_context_options(optimize)
+    # draft - unified content generation
+    draft = sub.add_parser("draft", help="Generate promotional content with interactive editing.")
+    _add_target(draft)
+    draft.add_argument("--stage", choices=["research", "blueprint", "produce", "all"], default="all", help="Run up to this stage.")
+    draft.add_argument("--interactive", "-i", action="store_true", help="Stop at blueprint for editing.")
+    draft.add_argument("--edit", help="Edit blueprint: JSON file with edits {element_id: new_content}")
+    draft.add_argument("--preview", action="store_true", help="Preview blueprint content.")
+    draft.add_argument("--resume", action="store_true", help="Resume from saved blueprint.")
+    draft.add_argument("--parallel", action="store_true", default=True, help="Parallel platform generation.")
+    draft.add_argument("--platforms", help="Comma-separated list of target platforms.")
+    draft.add_argument("--image", action="store_true", help="Generate cover images.")
+    draft.add_argument("--output-dir", default="launch-assets", help="Output directory for files.")
+    draft.add_argument("--json", action="store_true", help="Output as JSON.")
+    draft.add_argument("-o", "--output", help="Output file.")
+    _add_ai_options(draft)
 
     # fill
     fill = sub.add_parser("fill", help="Auto-fill content in browser.")
@@ -97,14 +88,6 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1", help="Host to bind.")
     serve.add_argument("--port", type=int, default=7860, help="Port.")
     serve.add_argument("--share", action="store_true", help="Create public link.")
-
-    # refine
-    refine = sub.add_parser("refine", help="Refine generated content.")
-    refine.add_argument("feedback", help="What to change.")
-    refine.add_argument("--platform", help="Target platform.")
-    refine.add_argument("--session", default=_SESSION_FILE, help="Session file.")
-    refine.add_argument("-o", "--output", help="Output file.")
-    _add_ai_options(refine)
 
     # cache
     cache = sub.add_parser("cache", help="Manage cache.")
@@ -135,16 +118,10 @@ def _add_ai_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--temperature", type=float, help="Override temperature.")
 
 
-def _add_context_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--context", action="append", default=[], help="Extra context file/URL.")
-    parser.add_argument("--prompt-note", action="append", default=[], help="Writing instructions.")
-    parser.add_argument("--prompt-preset", action="append", default=[], help="Preset name(s).")
-
-
 def _normalize_argv(argv: list[str]) -> list[str]:
     if not argv:
         return ["analyze", "."]
-    if argv[0] in {"analyze", "promote", "optimize", "fill", "publish", "serve", "refine", "cache", "platforms", "setup", "doctor", "-h", "--help", "--version"}:
+    if argv[0] in {"analyze", "draft", "fill", "publish", "serve", "cache", "platforms", "setup", "doctor", "-h", "--help", "--version"}:
         return argv
     return ["analyze", *argv]
 
@@ -164,89 +141,9 @@ def _run_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_promote(args: argparse.Namespace) -> int:
-    from .interactive import ask_and_merge, has_significant_gaps
-
-    with progress_spinner("Analyzing source"):
-        result = analyze_target(args.target)
-
-    if args.interactive or (not args.json and has_significant_gaps(result)):
-        result = ask_and_merge(result, force=args.interactive)
-
-    payload = build_promo_payload(result)
-    brief = _build_brief(args)
-
-    if args.ai:
-        ai_result = _call_ai(result, platform=args.platform, brief=brief, args=args)
-        _save_session(ai_result, result)
-        if args.json:
-            _write_or_print(json.dumps({"ai": {"content": ai_result["content"], "model": ai_result["model"]}, "project": result["project"]}, ensure_ascii=False, indent=2), args.output)
-        else:
-            print_promo_result(ai_result["content"])
-            print_tip("Run `promoagent refine \"<feedback>\"` to refine content")
-    elif args.json:
-        _write_or_print(json.dumps({"platform": args.platform, "system": build_promo_system_prompt(), "user": build_promo_user_prompt(payload, platform=args.platform, brief_section=brief), "evidenceBrief": build_evidence_brief(payload), "payload": payload}, ensure_ascii=False, indent=2), args.output)
-    else:
-        print_info("Analysis complete. Run with --ai to generate content.")
-        print_code(build_evidence_brief(payload), language="markdown", title="Evidence Brief")
-        print_tip("Set PROMOAGENT_API_KEY to enable AI generation")
-    return 0
-
-
-def _run_optimize(args: argparse.Namespace) -> int:
-    from .interactive import ask_and_merge, has_significant_gaps
-
-    with progress_spinner("Analyzing source"):
-        result = analyze_target(args.target)
-
-    if args.interactive or has_significant_gaps(result):
-        result = ask_and_merge(result, force=args.interactive)
-
-    ai_result = _call_ai(result, platform="all", brief=_build_brief(args), args=args) if args.ai else None
-    image_options = {"model": args.image_model} if args.image else None
-
-    with progress_spinner("Generating launch assets"):
-        manifest = run_optimize(
-            result, cwd=Path.cwd(), output_dir=args.output_dir,
-            ai_content=ai_result.get("content") if ai_result else None,
-            ai_model=ai_result.get("model") if ai_result else None,
-            generate_images=args.image, image_options=image_options,
-        )
-
-    print_optimize_manifest(manifest)
-    print_tip("Run `promoagent refine \"<feedback>\"` to iterate")
-    return 0
-
-
-def _run_refine(args: argparse.Namespace) -> int:
-    session_path = Path(args.session)
-    if not session_path.exists():
-        print_error(f"Session file not found: {session_path}\nRun `promoagent promote ... --ai` first.")
-        return 1
-
-    previous = json.loads(session_path.read_text(encoding="utf-8"))
-    options = {k: getattr(args, k) for k in ["model", "base_url", "max_tokens", "temperature"] if getattr(args, k)}
-
-    try:
-        ai_result = refine_content(previous, args.feedback, platform=args.platform, options=options)
-    except Exception as exc:
-        print_error(str(exc))
-        return 1
-
-    _save_session(ai_result)
-    _write_or_print(_format_ai_output(previous.get("result", {"project": {}}), ai_result["content"]), args.output)
-    print_success("Content refined. Run `refine` again to continue.")
-    return 0
-
-
 def _run_serve(args: argparse.Namespace) -> int:
-    try:
-        from .web import launch
-    except ImportError:
-        print_error("Gradio required. Install: pip install gradio")
-        return 1
-    launch(host=args.host, port=args.port, share=args.share)
-    return 0
+    print_error("Web UI is temporarily unavailable. Use `promoagent draft` command instead.")
+    return 1
 
 
 def _run_fill(args: argparse.Namespace) -> int:
@@ -256,7 +153,7 @@ def _run_fill(args: argparse.Namespace) -> int:
     try:
         content = args.content or load_content_from_assets(args.assets_dir, args.platform)
     except FileNotFoundError as exc:
-        print_error(f"{exc}\nTip: Run `promoagent optimize --ai` first.")
+        print_error(f"{exc}\nTip: Run `promoagent draft . --output-dir {args.assets_dir}` first.")
         return 1
 
     fill_platform(args.platform.lower().strip(), content, title=args.title, headless=args.headless)
@@ -277,7 +174,7 @@ def _run_publish_cmd(args: argparse.Namespace) -> int:
     try:
         content = args.content or load_content_from_assets(args.assets_dir, platform)
     except FileNotFoundError as exc:
-        print_error(f"{exc}\nTip: Run `promoagent optimize --ai` first.")
+        print_error(f"{exc}\nTip: Run `promoagent draft . --output-dir {args.assets_dir}` first.")
         return 1
 
     if args.dry_run:
@@ -330,83 +227,188 @@ def _run_doctor(_args: argparse.Namespace) -> int:
     return run_doctor()
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _call_ai(result: dict[str, Any], *, platform: str, brief: str, args: argparse.Namespace) -> dict[str, Any]:
-    if not has_ai_key():
-        raise RuntimeError("No API key found. Set PROMOAGENT_API_KEY or PROMOAGENT_MODELSCOPE_API_KEY.")
+def _run_draft(args: argparse.Namespace) -> int:
+    """Run improved 3-stage content generation pipeline."""
+    from .pipeline import (
+        PipelineState,
+        run_pipeline,
+        stage_research,
+        stage_blueprint,
+        stage_produce,
+        edit_blueprint,
+        preview_blueprint,
+        generate_assets,
+        _source_id,
+    )
 
     options = {k: getattr(args, k) for k in ["model", "base_url", "max_tokens", "temperature"] if getattr(args, k)}
 
-    examples = None
-    if not args.no_examples:
-        from .examples import find_examples
-        examples = find_examples(result, platform=platform, ai_options=options) or None
+    with progress_spinner("Analyzing source"):
+        result = analyze_target(args.target)
 
-    return generate_ai_content(result, platform=platform, brief_section=brief, examples=examples, options=options)
+    source_id = _source_id(result)
+    state = PipelineState(source_id)
+
+    # Handle resume mode
+    blueprint_path = Path(".blueprint.json")
+    if args.resume and state.has("blueprint"):
+        print_info("Resuming from saved Blueprint")
+        blueprint = state.get("blueprint")
+
+        if args.edit:
+            edit_file = Path(args.edit)
+            if edit_file.exists():
+                edits = json.loads(edit_file.read_text(encoding="utf-8"))
+                blueprint = edit_blueprint(blueprint, edits)
+                state.set("blueprint", blueprint)
+                print_success("Applied edits to Blueprint")
+
+        if args.preview:
+            preview = preview_blueprint(blueprint)
+            print(preview)
+            return 0
+
+        # Continue to produce
+        research = state.get("research")
+        if research is None:
+            print_error("Cannot resume: research stage is missing from saved state. Re-run `promoagent draft` from the start.")
+            return 1
+        platforms = args.platforms.split(",") if args.platforms else None
+        produce = stage_produce(blueprint, research, state, options, platforms=platforms, parallel=args.parallel)
+
+        # Generate assets
+        assets = generate_assets(blueprint, produce, platforms=platforms, options=options)
+
+        if args.json:
+            output = {"produce": produce.get("data", {}), "assets": assets}
+            _write_or_print(json.dumps(output, ensure_ascii=False, indent=2), args.output)
+        else:
+            print_promo_result(produce.get("data", {}))
+        return 0
+
+    # Run pipeline
+    stop_after = args.stage if args.stage != "all" else None
+    outputs = run_pipeline(result, options, stop_after=stop_after, state=state)
+
+    # Handle interactive mode at blueprint stage
+    if args.stage == "blueprint" or (args.interactive and "blueprint" in outputs):
+        blueprint = outputs["blueprint"]
+
+        # Also save to local file for easy editing
+        blueprint_path.write_text(json.dumps(blueprint, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        preview = preview_blueprint(blueprint)
+        console.print("\n" + "=" * 60)
+        console.print("[bold cyan]BLUEPRINT PREVIEW (Editable)[/]")
+        console.print("=" * 60)
+        console.print(preview)
+        console.print("=" * 60)
+
+        # Show editable elements
+        data = blueprint.get("data", {})
+        console.print("\n[bold]Editable Elements:[/]")
+        for element in data.get("elements", []):
+            elem_id = element.get("id", "")
+            label = element.get("label", "")
+            content = element.get("content", "")[:50]
+            variants = element.get("variants", [])
+            marker = "✎" if element.get("editable") else " "
+            console.print(f"\n  [{marker}] {elem_id}: {label}")
+            console.print(f"      [dim]{content}...[/]")
+            if variants:
+                console.print(f"      [dim]({len(variants)} variants available)[/]")
+
+        # Show alternative structures
+        structures = data.get("structure", {}).get("alternative_structures", [])
+        if structures:
+            console.print("\n[bold]Alternative Structures:[/]")
+            for struct in structures:
+                console.print(f"  • {struct.get('name')}: {' → '.join(struct.get('order', []))}")
+
+        print_info(f"Blueprint saved to: {blueprint_path}")
+        print_tip("To continue after editing: promoagent draft --resume --stage produce")
+        return 0
+
+    # Output results
+    if args.json:
+        output_data = {k: v.get("data", {}) for k, v in outputs.items()}
+        _write_or_print(json.dumps(output_data, ensure_ascii=False, indent=2), args.output)
+    else:
+        # Print summary
+        if "research" in outputs:
+            research_data = outputs["research"].get("data", {})
+            facts = research_data.get("facts", {})
+            strategy = research_data.get("strategy", {})
+
+            console.print("\n" + "=" * 50)
+            console.print("[bold cyan]RESEARCH RESULTS[/]")
+            console.print("=" * 50)
+            console.print(f"[bold]Core Claim:[/] {facts.get('core_claim', 'N/A')}")
+            console.print(f"[bold]Positioning:[/] {strategy.get('positioning', {}).get('one_liner', 'N/A')}")
+            console.print(f"[bold]Platforms:[/] {', '.join(strategy.get('recommended_platforms', []))}")
+
+        if "blueprint" in outputs:
+            blueprint_data = outputs["blueprint"].get("data", {})
+            console.print("\n" + "=" * 50)
+            console.print("[bold cyan]BLUEPRINT[/]")
+            console.print("=" * 50)
+            console.print(f"[bold]Elements:[/] {len(blueprint_data.get('elements', []))}")
+            console.print(f"[bold]Key Message:[/] {blueprint_data.get('positioning', {}).get('key_message', 'N/A')[:60]}...")
+
+        if "produce" in outputs:
+            produce_data = outputs["produce"].get("data", {})
+            console.print("\n" + "=" * 50)
+            console.print("[bold cyan]PLATFORM CONTENT[/]")
+            console.print("=" * 50)
+            for platform, content in produce_data.items():
+                if isinstance(content, dict) and "error" not in content:
+                    md = content.get("markdown", "")[:100]
+                    console.print(f"\n[bold]{platform}:[/]")
+                    console.print(f"  [dim]{md}...[/]")
+
+    # Handle file output and image generation for full pipeline
+    if args.stage == "all" or args.stage == "produce":
+        if hasattr(args, 'output_dir') and args.output_dir:
+            # Generate and save files
+            output_path = Path(args.output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+
+            produce_data = outputs.get("produce", {}).get("data", {})
+
+            # Save platform content to files
+            saved_files = []
+            for platform, content in produce_data.items():
+                if isinstance(content, dict) and "markdown" in content:
+                    filename = f"promo-{platform}.md"
+                    filepath = output_path / filename
+                    filepath.write_text(content.get("markdown", ""), encoding="utf-8")
+                    saved_files.append(filename)
+
+            # Save blueprint
+            blueprint = outputs.get("blueprint", {})
+            (output_path / "blueprint.json").write_text(
+                json.dumps(blueprint, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
+            # Generate images if requested
+            if args.image:
+                from .image import generate_platform_images
+                try:
+                    image_options = {"platforms": args.platforms} if args.platforms else {}
+                    images = generate_platform_images(result, output_path, image_options)
+                    if images:
+                        print_success(f"Generated {len(images)} images")
+                except Exception as exc:
+                    print_warning(f"Image generation failed: {exc}")
+
+            print_success(f"Saved {len(saved_files)} files to {output_path}")
+
+    return 0
 
 
-def _build_brief(args: argparse.Namespace) -> str:
-    parts = []
-    if presets := _flatten(args.prompt_preset):
-        if expanded := expand_presets(presets):
-            parts += ["## Prompt Presets", "", expanded, ""]
-    if args.prompt_note:
-        parts += ["## Writing Instructions", ""] + [f"- {n}" for n in args.prompt_note] + [""]
-    if args.context:
-        parts += ["## Additional Context", ""] + [_format_context(c) for c in args.context] + [""]
-    return "\n".join(parts).strip()
-
-
-def _flatten(values: list[str]) -> list[str]:
-    result = []
-    for v in values:
-        result.extend(p.strip() for p in str(v or "").split(",") if p.strip())
-    return result
-
-
-def _format_context(value: str) -> str:
-    raw = str(value or "").strip()
-    if raw.startswith(("http://", "https://")):
-        return f"### Remote context: {raw}\nUse as review note; content may not have been fetched."
-    path = Path(raw).expanduser()
-    if not path.exists():
-        return f"### Note: {raw}"
-    if path.is_dir():
-        return f"### Directory context: {path}"
-    text = path.read_text(encoding="utf-8", errors="replace")
-    clipped = text if len(text) <= 4000 else text[:4000] + "\n\n...[truncated]"
-    return f"### Context: {path.name}\n\n{clipped}"
-
-
-def _format_ai_output(result: dict[str, Any], content: dict[str, Any]) -> str:
-    project = result.get("project", {})
-    lines = [f"# {project.get('name', 'Project')} · Launch Content", ""]
-    if positioning := content.get("positioning"):
-        lines.append(f"**Positioning:** {positioning}")
-    if strategy := content.get("promotionStrategy", {}):
-        if core_angle := strategy.get("coreAngle"):
-            lines += ["## Strategy", "", core_angle, ""]
-    if promotions := content.get("promotions", {}):
-        for key, item in promotions.items():
-            if isinstance(item, dict) and (md := item.get("markdown")):
-                lines += [f"## {key}", "", str(md).strip(), ""]
-    if len(lines) <= 4:
-        lines.append(json.dumps(content, ensure_ascii=False, indent=2))
-    return "\n".join(lines).rstrip()
-
-
-def _save_session(ai_result: dict[str, Any], result: dict[str, Any] | None = None) -> None:
-    session = {"messages": ai_result.get("messages", []), "content": ai_result.get("content", {}), "model": ai_result.get("model"), "baseUrl": ai_result.get("baseUrl")}
-    if result:
-        session["result"] = result
-    try:
-        Path(_SESSION_FILE).write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        pass
-
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _write_or_print(output: str, path: str | None) -> None:
     if path:
@@ -415,5 +417,4 @@ def _write_or_print(output: str, path: str | None) -> None:
         p.write_text(output.rstrip() + "\n", encoding="utf-8")
         print_success(f"Saved to {p}")
     else:
-        from .ui import stdout_console
-        stdout_console.print(output.rstrip())
+        sys.stdout.write(output.rstrip() + "\n")

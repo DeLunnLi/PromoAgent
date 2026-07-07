@@ -78,22 +78,51 @@ def _write_promo_files(
     ai_content: dict[str, Any] | None,
     generated: list[str],
 ) -> None:
+    """Write promotional content to files.
+
+    Supports both old format (with 'promotions' key) and new pipeline format.
+    """
     write_file(out / "evidence-summary.md", _evidence_summary(project, evidence), generated)
 
-    promotions = (ai_content or {}).get("promotions") or {}
-    if promotions:
-        # Save whatever platforms the AI returned — no hardcoded list
+    if not ai_content:
+        # No AI content — write a single placeholder
+        write_file(
+            out / "promo-draft.md",
+            f"# {project.get('name', 'Project')} · Draft\n\n"
+            "> Run `promoagent draft` to generate platform copy.\n",
+            generated,
+        )
+        return
+
+    # Try new pipeline format first (platform as top-level key)
+    platforms_written = False
+    for key, item in ai_content.items():
+        # Skip non-platform keys
+        if key in ("positioning", "strategy", "research", "blueprint"):
+            continue
+
+        content = _extract_markdown(item)
+        if content:
+            filename = _platform_filename(key)
+            write_file(out / filename, content, generated)
+            platforms_written = True
+
+    # Try old format (nested under 'promotions')
+    if not platforms_written:
+        promotions = ai_content.get("promotions") or {}
         for key, item in promotions.items():
             content = _extract_markdown(item)
             if content:
                 filename = _platform_filename(key)
                 write_file(out / filename, content, generated)
-    else:
-        # No AI content — write a single placeholder
+                platforms_written = True
+
+    if not platforms_written:
+        # No recognizable content format
         write_file(
             out / "promo-draft.md",
             f"# {project.get('name', 'Project')} · Draft\n\n"
-            "> Run with `--ai` to generate platform copy.\n",
+            "> No content generated.\n",
             generated,
         )
 

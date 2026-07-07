@@ -84,7 +84,7 @@ def _fill_rich_editor(page, selector: str, text: str) -> None:
     try:
         page.evaluate(f"navigator.clipboard.writeText({text!r})")
         el.press("Control+V")
-    except Exception:  # noqa: BLE001
+    except Exception:
         # If clipboard not available, type slowly
         for line in text.split("\n"):
             el.type(line)

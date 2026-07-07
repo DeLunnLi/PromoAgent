@@ -29,14 +29,12 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 from .analyzer import analyze_target  # noqa: E402
-from .ai import generate_ai_content  # noqa: E402
-from .optimize import run_optimize  # noqa: E402
+from .pipeline import run_pipeline  # noqa: E402
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "__version__",
     "analyze_target",
-    "generate_ai_content",
-    "run_optimize",
+    "run_pipeline",
 ]

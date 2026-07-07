@@ -349,9 +349,17 @@ def publish_content(
 
 def load_content_from_assets(output_dir: str | Path, platform: str) -> str:
     """Read generated markdown content for a platform from launch-assets/."""
+    from .platforms import get_platform
+
     out = Path(output_dir)
-    # Try exact match first, then fuzzy
-    candidates = list(out.glob(f"*{platform}*.md"))
+    # Resolve aliases (xhs → xiaohongshu, x → twitter) so the glob matches the
+    # canonical filename written by optimize._platform_filename().
+    spec = get_platform(platform)
+    canonical = spec.key if spec else platform
+    # Try exact/canonical match first, then fuzzy on the raw input, then any promo file.
+    candidates = list(out.glob(f"*{canonical}*.md"))
+    if not candidates:
+        candidates = list(out.glob(f"*{platform}*.md"))
     if not candidates:
         candidates = list(out.glob("promo-*.md"))
     if not candidates:
