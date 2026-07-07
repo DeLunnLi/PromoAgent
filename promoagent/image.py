@@ -280,6 +280,15 @@ def _visual_text(value: Any, limit: int = 180) -> str:
     return text[:limit].strip()
 
 
+def _copy_safe_geometry(platform: str) -> str:
+    fmt = _platform_format(platform)
+    if fmt == "portrait":
+        return "Reserve a clean top 25-30% copy-safe zone with no hero objects, faces, logos, or strong detail."
+    if fmt == "landscape":
+        return "Reserve one side as a clean 40-45% copy-safe zone; keep the hero subject on the opposite side."
+    return "Reserve a clean compact upper-left 42-48% wide copy-safe zone; keep the hero subject entirely center-right or lower-right, outside that text area."
+
+
 def _bool_env(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -493,6 +502,7 @@ def build_image_prompt(
         f"Subject cues: {feature_str}.",
         f"Scene/backdrop: {profile['scene']}",
         f"Ad copy to reserve space for local overlay: headline '{overlay_title}', subhead '{overlay_subtitle}', CTA '{overlay_cta}'. Do not draw this text yourself.",
+        f"Copy-safe geometry: {_copy_safe_geometry(platform_key)}",
         f"Platform fit: {guide['fit']}",
         f"Style/medium: {style}, {profile['style']}",
         f"Composition/framing: {guide['composition']}",
@@ -832,9 +842,9 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
         cta_size = max(18, min(30, int(width * 0.02)))
     else:
         margin = int(width * 0.075)
-        block = (margin, int(height * 0.075), width - margin, int(height * 0.55))
-        title_size = max(34, min(76, int(width * 0.068)))
-        subtitle_size = max(20, min(34, int(width * 0.03)))
+        block = (margin, int(height * 0.075), int(width * 0.48), int(height * 0.46))
+        title_size = max(32, min(56, int(width * 0.052)))
+        subtitle_size = max(19, min(30, int(width * 0.028)))
         cta_size = max(18, min(30, int(width * 0.027)))
 
     bright = _region_is_bright(img, block)
@@ -842,7 +852,7 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
     title_ink = (18, 22, 30, 255) if bright else (255, 255, 255, 255)
     body_ink = (48, 55, 68, 235) if bright else (245, 247, 252, 232)
     if not bright:
-        panel_fill = (10, 14, 22, 132)
+        panel_fill = (10, 14, 22, 96)
 
     x1, y1, x2, _y2 = block
     max_text_width = x2 - x1

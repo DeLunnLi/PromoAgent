@@ -582,6 +582,7 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("product desirability", prompt)
         self.assertIn("one clear hero product", prompt)
         self.assertIn("square 1:1 card", prompt)
+        self.assertIn("upper-left 42-48% wide copy-safe zone", prompt)
 
     def test_build_image_prompt_adapts_to_research_recommendation(self):
         result = analyze_free_text("一篇关于推荐系统冷启动问题的研究论文，包含实验、数据集和方法对比")
