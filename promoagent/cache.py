@@ -202,7 +202,14 @@ def get_stats(cache_dir: Path | None = None) -> dict[str, Any]:
     """
     cache_dir = cache_dir or DEFAULT_CACHE_DIR
     if not cache_dir.exists():
-        return {"entries": 0, "size_bytes": 0}
+        return {
+            "entries": 0,
+            "valid_entries": 0,
+            "expired_entries": 0,
+            "size_bytes": 0,
+            "size_human": _human_readable_size(0),
+            "cache_dir": str(cache_dir),
+        }
 
     entries = 0
     total_size = 0

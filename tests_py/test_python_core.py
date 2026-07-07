@@ -18,11 +18,11 @@ from promoagent.publish import (
     available_publishers, publish_content,
 )
 from promoagent.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
-from promoagent.image import build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images
+from promoagent.image import apply_text_overlay, build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images, image_brief, image_config
 from promoagent.examples import detect_category, find_examples, format_examples_for_prompt
 from promoagent.interactive import has_significant_gaps, identify_gaps
 from promoagent.optimize import run_optimize
-from promoagent.promo_prompts import PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_user_prompt, expand_presets
+from promoagent.promo_prompts import PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_system_prompt, build_promo_user_prompt, expand_presets
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests_py" / "fixtures"
@@ -519,6 +519,8 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("repo-pulse", prompt)
         self.assertIn("3:4", prompt)
         self.assertIn("poster", prompt)
+        self.assertIn("ad-ready campaign visual", prompt)
+        self.assertIn("Ad copy to reserve space", prompt)
 
     def test_build_image_prompt_platform_dims(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
@@ -526,6 +528,86 @@ class PythonCoreTest(unittest.TestCase):
         wechat_prompt = build_image_prompt(result, platform="wechat")
         self.assertIn("3:4", xhs_prompt)
         self.assertIn("1:1", wechat_prompt)
+
+    def test_build_image_prompt_adapts_to_restaurant_recommendation(self):
+        result = analyze_free_text("上海阿强火锅，主打麻辣鲜香，人均80元，位于静安区南京西路")
+        prompt = build_image_prompt(result, platform="xhs")
+
+        self.assertIn("restaurant/local lifestyle recommendation", prompt)
+        self.assertIn("sensory appeal", prompt)
+        self.assertIn("Scene/backdrop", prompt)
+        self.assertIn("Visual density", prompt)
+        self.assertNotIn("open source software", prompt)
+        self.assertNotIn("modern tech editorial", prompt)
+
+    def test_build_image_prompt_adapts_to_event_recommendation(self):
+        result = analyze_free_text("周末 AI 创业者线下沙龙，上海徐汇，适合产品经理和独立开发者报名")
+        prompt = build_image_prompt(result, platform="linkedin")
+
+        self.assertIn("event/activity recommendation", prompt)
+        self.assertIn("why attend", prompt)
+        self.assertIn("wide LinkedIn banner", prompt)
+
+    def test_build_image_prompt_adapts_to_product_recommendation(self):
+        result = analyze_free_text("LuminaDesk 护眼桌面灯，三档色温，金属机身，售价299元")
+        prompt = build_image_prompt(result, platform="wechat")
+
+        self.assertIn("consumer product recommendation", prompt)
+        self.assertIn("product desirability", prompt)
+        self.assertIn("one clear hero product", prompt)
+        self.assertIn("square 1:1 card", prompt)
+
+    def test_build_image_prompt_adapts_to_research_recommendation(self):
+        result = analyze_free_text("一篇关于推荐系统冷启动问题的研究论文，包含实验、数据集和方法对比")
+        prompt = build_image_prompt(result, platform="zhihu")
+
+        self.assertIn("research/document recommendation", prompt)
+        self.assertIn("method clarity", prompt)
+        self.assertIn("senior art director", prompt)
+        self.assertIn("wide 16:9 header image", prompt)
+
+    def test_image_brief_resolves_ad_overlay_fields(self):
+        result = analyze_free_text("一款适合夜间学习的护眼桌面灯，售价299元")
+        brief = image_brief(result, options={
+            "title": "今晚桌面更舒服",
+            "subtitle": "三档色温，减少眩光",
+            "cta": "立即了解",
+            "badges": "护眼,金属机身",
+        }, env={})
+
+        self.assertEqual(brief["title"], "今晚桌面更舒服")
+        self.assertEqual(brief["cta"], "立即了解")
+        self.assertIn("护眼", brief["badges"])
+        self.assertTrue(brief["textOverlay"])
+
+    def test_apply_text_overlay_writes_ad_copy(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cover.png"
+            Image.new("RGB", (900, 1200), (230, 224, 214)).save(path)
+            before = path.read_bytes()
+
+            changed = apply_text_overlay(path, platform="xhs", brief={
+                "title": "今晚桌面更舒服",
+                "subtitle": "三档色温，减少眩光",
+                "cta": "立即了解",
+                "badges": ["护眼", "金属机身"],
+                "textOverlay": True,
+            })
+
+            self.assertTrue(changed)
+            self.assertNotEqual(path.read_bytes(), before)
+
+    def test_promo_system_prompt_includes_recommendation_task_guidance(self):
+        prompt = build_promo_system_prompt()
+
+        self.assertIn("推荐任务适配", prompt)
+        self.assertIn("软件/工具", prompt)
+        self.assertIn("本地生活/餐饮", prompt)
 
     def test_fetch_readme_images_returns_empty_when_no_urls(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
@@ -547,6 +629,7 @@ class PythonCoreTest(unittest.TestCase):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
         # Remove any API key from environment for this test
         env_backup = {k: os.environ.pop(k, None) for k in [
+            "PROMOAGENT_IMAGE_API_KEY", "OPENAI_API_KEY",
             "PROMOAGENT_MODELSCOPE_API_KEY", "PROMOAGENT_API_KEY", "MODELSCOPE_API_KEY"
         ]}
         try:
@@ -621,6 +704,48 @@ class PythonCoreTest(unittest.TestCase):
 
         self.assertEqual(meta["provider"], "openai")
         self.assertEqual(meta["size"], "1024x1536")   # xhs portrait size
+
+    def test_image_config_uses_image_specific_openai_env(self):
+        env = {
+            "PROMOAGENT_IMAGE_API_KEY": "image-key",
+            "PROMOAGENT_IMAGE_BASE_URL": "https://image.example.test/v1",
+            "PROMOAGENT_API_KEY": "text-key",
+            "PROMOAGENT_BASE_URL": "https://text.example.test/v1",
+            "PROMOAGENT_IMAGE_MODEL": "gpt-image-2",
+        }
+        cfg = image_config(env=env)
+
+        self.assertEqual(cfg["apiKey"], "image-key")
+        self.assertEqual(cfg["baseUrl"], "https://image.example.test/v1")
+        self.assertEqual(cfg["model"], "gpt-image-2")
+
+    def test_generate_platform_images_with_custom_openai_platforms(self):
+        """Image platform list can be customized for platform-specific assets."""
+        import base64
+        png_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        )
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        server = MockOpenAIImageServer(png_bytes)
+        server.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                output_dir = Path(tmp) / "launch-assets"
+                images = generate_platform_images(
+                    result,
+                    output_dir,
+                    options={
+                        "base_url": server.base_url,
+                        "api_key": "test-key",
+                        "model": "gpt-image-2",
+                        "platforms": "twitter,linkedin",
+                    },
+                )
+                names = {Path(img["outputPath"]).name for img in images if img.get("provider") == "openai"}
+                self.assertIn("cover-twitter.png", names)
+                self.assertIn("cover-linkedin.png", names)
+        finally:
+            server.stop()
 
     def test_openai_model_detection(self):
         from promoagent.image import _is_openai_model
@@ -819,6 +944,16 @@ class PythonCoreTest(unittest.TestCase):
             self.assertEqual(stats["entries"], 2)
             self.assertEqual(stats["valid_entries"], 2)
             self.assertIn("size_human", stats)
+
+    def test_cache_stats_reports_empty_missing_cache_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stats = get_stats(cache_dir=Path(tmp) / "missing-cache")
+
+            self.assertEqual(stats["entries"], 0)
+            self.assertEqual(stats["valid_entries"], 0)
+            self.assertEqual(stats["expired_entries"], 0)
+            self.assertIn("size_human", stats)
+            self.assertIn("cache_dir", stats)
 
     def test_cache_key_generation(self):
         key1 = _make_key("github", "repos", "openai/whisper")

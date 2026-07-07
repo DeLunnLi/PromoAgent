@@ -128,6 +128,7 @@ def run_doctor() -> int:
     """Check configuration and dependencies."""
     from .ai import has_ai_key
     from .cache import get_stats
+    from .image import has_image_key
 
     console.print(Panel(
         "[bold cyan]PromoAgent Configuration Check[/]",
@@ -148,11 +149,20 @@ def run_doctor() -> int:
     else:
         table.add_row("Python Version", "[red]✗[/]", f"{py_version} (Need 3.10+)")
 
+    ai_ok = has_ai_key()
+    image_ok = has_image_key()
+
     # Check AI API Key
-    if has_ai_key():
+    if ai_ok:
         table.add_row("AI API Key", "[green]✓[/]", "Configured")
     else:
         table.add_row("AI API Key", "[red]✗[/]", "Not found (run: promoagent setup)")
+
+    # Check Image API Key
+    if image_ok:
+        table.add_row("Image API Key", "[green]✓[/]", "Configured")
+    else:
+        table.add_row("Image API Key", "[dim]○[/]", "Not found (set PROMOAGENT_IMAGE_API_KEY)")
 
     # Check optional dependencies
     optional_deps = [
@@ -169,7 +179,7 @@ def run_doctor() -> int:
             __import__(module)
             table.add_row(name, "[green]✓[/]", f"Installed ({extra})")
         except ImportError:
-            table.add_row(name, "[dim]○[/]", f"Not installed (pip install 'promoagent[{extra}]')")
+            table.add_row(name, "[dim]○[/]", f"Not installed (pip install 'promoagent\\[{extra}]')")
 
     # Check cache
     stats = get_stats()
@@ -178,9 +188,9 @@ def run_doctor() -> int:
     console.print(table)
 
     # Overall status
-    if has_ai_key():
+    if ai_ok or image_ok:
         console.print(Panel(
-            "[bold green]✓ PromoAgent is ready to use![/]",
+            "[bold green]✓ PromoAgent has usable API configuration for the enabled feature set.[/]",
             border_style="green",
             box=box.ROUNDED,
         ))

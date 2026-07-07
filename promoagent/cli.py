@@ -72,6 +72,16 @@ def _build_parser() -> argparse.ArgumentParser:
     optimize.add_argument("--no-examples", action="store_true", help="Skip examples.")
     optimize.add_argument("--image", action="store_true", help="Generate cover images.")
     optimize.add_argument("--image-model", dest="image_model", help="Image model override.")
+    optimize.add_argument("--image-platforms", dest="image_platforms", help="Comma-separated platforms for cover images.")
+    optimize.add_argument("--image-style", dest="image_style", help="Visual style hint for cover images.")
+    optimize.add_argument("--image-interactive", action="store_true", help="Ask for ad image brief before generation.")
+    optimize.add_argument("--image-title", dest="image_title", help="Ad headline rendered as local overlay.")
+    optimize.add_argument("--image-subtitle", dest="image_subtitle", help="Ad subhead rendered as local overlay.")
+    optimize.add_argument("--image-cta", dest="image_cta", help="CTA text rendered as local overlay.")
+    optimize.add_argument("--image-badges", dest="image_badges", help="Comma-separated badges rendered as local overlay.")
+    optimize.add_argument("--image-note", dest="image_note", help="Creative direction for image prompt.")
+    optimize.add_argument("--image-variants", dest="image_variants", type=int, help="Number of image variants per platform.")
+    optimize.add_argument("--no-image-text-overlay", action="store_true", help="Disable local ad text overlay.")
     _add_ai_options(optimize)
     _add_context_options(optimize)
 
@@ -203,7 +213,27 @@ def _run_optimize(args: argparse.Namespace) -> int:
         result = ask_and_merge(result, force=args.interactive)
 
     ai_result = _call_ai(result, platform="all", brief=_build_brief(args), args=args) if args.ai else None
-    image_options = {"model": args.image_model} if args.image else None
+    image_options = None
+    if args.image:
+        image_options = {
+            k: v for k, v in {
+                "model": args.image_model,
+                "platforms": args.image_platforms,
+                "style": args.image_style,
+                "title": args.image_title,
+                "subtitle": args.image_subtitle,
+                "cta": args.image_cta,
+                "badges": args.image_badges,
+                "note": args.image_note,
+                "variants": args.image_variants,
+                "text_overlay": False if args.no_image_text_overlay else None,
+            }.items() if v
+        }
+        if args.no_image_text_overlay:
+            image_options["text_overlay"] = False
+        if args.image_interactive:
+            from .image import ask_image_brief_interactively
+            image_options = ask_image_brief_interactively(result, image_options)
 
     with progress_spinner("Generating launch assets"):
         manifest = run_optimize(
@@ -415,5 +445,4 @@ def _write_or_print(output: str, path: str | None) -> None:
         p.write_text(output.rstrip() + "\n", encoding="utf-8")
         print_success(f"Saved to {p}")
     else:
-        from .ui import stdout_console
-        stdout_console.print(output.rstrip())
+        sys.stdout.write(output.rstrip() + "\n")

@@ -245,6 +245,28 @@ promoagent promote . \
   --ai
 ```
 
+### Interactive Ad Images
+
+```bash
+promoagent optimize . \
+  --image \
+  --image-platforms xhs,wechat \
+  --image-interactive \
+  --image-variants 2
+```
+
+For non-interactive runs, pass the ad copy directly:
+
+```bash
+promoagent optimize . \
+  --image \
+  --image-platforms xhs \
+  --image-title "一键把项目变成推广素材" \
+  --image-subtitle "自动读证据，生成多平台文案和广告封面" \
+  --image-cta "立即生成" \
+  --image-badges "小红书封面,多平台推广,证据驱动"
+```
+
 ### Browser Auto-Fill
 
 ```bash
