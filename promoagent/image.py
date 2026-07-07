@@ -788,16 +788,26 @@ def _region_is_bright(image: Any, box: tuple[int, int, int, int]) -> bool:
     return mean > 145
 
 
-def _draw_pill(draw: Any, xy: tuple[int, int], text: str, font: Any, fill: tuple[int, int, int, int], ink: tuple[int, int, int, int]) -> int:
+def _draw_pill(
+    draw: Any,
+    xy: tuple[int, int],
+    text: str,
+    font: Any,
+    fill: tuple[int, int, int, int],
+    ink: tuple[int, int, int, int],
+    *,
+    outline: tuple[int, int, int, int] | None = None,
+    outline_width: int = 1,
+) -> int:
     x, y = xy
     font_size = int(getattr(font, "size", 18))
     pad_x = max(10, int(font_size * 0.55))
     pad_y = max(5, int(font_size * 0.28))
-    width = _text_width(draw, text, font) + pad_x * 2
+    pill_width = _text_width(draw, text, font) + pad_x * 2
     height = int(font_size * 1.45)
-    draw.rounded_rectangle((x, y, x + width, y + height), radius=height // 2, fill=fill)
+    draw.rounded_rectangle((x, y, x + pill_width, y + height), radius=height // 2, fill=fill, outline=outline, width=outline_width)
     draw.text((x + pad_x, y + pad_y - 1), text, font=font, fill=ink)
-    return width
+    return pill_width
 
 
 def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str, Any]) -> bool:
@@ -828,6 +838,8 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
     draw = ImageDraw.Draw(overlay)
     fmt = _platform_format(platform)
 
+    editorial_square = fmt == "square"
+
     if fmt == "portrait":
         margin = int(width * 0.07)
         block = (margin, int(height * 0.055), width - margin, int(height * 0.36))
@@ -842,17 +854,26 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
         cta_size = max(18, min(30, int(width * 0.02)))
     else:
         margin = int(width * 0.075)
-        block = (margin, int(height * 0.075), int(width * 0.48), int(height * 0.46))
-        title_size = max(32, min(56, int(width * 0.052)))
-        subtitle_size = max(19, min(30, int(width * 0.028)))
-        cta_size = max(18, min(30, int(width * 0.027)))
+        block = (margin, int(height * 0.075), int(width * 0.46), int(height * 0.44))
+        title_size = max(30, min(50, int(width * 0.048)))
+        subtitle_size = max(18, min(28, int(width * 0.026)))
+        cta_size = max(17, min(26, int(width * 0.024)))
 
     bright = _region_is_bright(img, block)
-    panel_fill = (255, 255, 255, 178) if not bright else (255, 255, 255, 118)
-    title_ink = (18, 22, 30, 255) if bright else (255, 255, 255, 255)
-    body_ink = (48, 55, 68, 235) if bright else (245, 247, 252, 232)
-    if not bright:
-        panel_fill = (10, 14, 22, 96)
+    if editorial_square:
+        panel_fill = (250, 244, 234, 174)
+        panel_outline = (255, 255, 255, 96)
+        title_ink = (35, 29, 24, 255)
+        body_ink = (82, 69, 58, 238)
+        accent_ink = (190, 126, 57, 235)
+    else:
+        panel_fill = (255, 255, 255, 178) if not bright else (255, 255, 255, 118)
+        panel_outline = None
+        title_ink = (18, 22, 30, 255) if bright else (255, 255, 255, 255)
+        body_ink = (48, 55, 68, 235) if bright else (245, 247, 252, 232)
+        accent_ink = (255, 255, 255, 0)
+        if not bright:
+            panel_fill = (10, 14, 22, 96)
 
     x1, y1, x2, _y2 = block
     max_text_width = x2 - x1
@@ -872,6 +893,8 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
     subtitle_lines = _wrap_visual_text(draw, subtitle, subtitle_font, max_text_width, 2)
     title_size = int(getattr(title_font, "size", title_size))
     panel_bottom = y + len(title_lines) * int(title_size * 1.12)
+    if editorial_square:
+        panel_bottom += int(title_size * 0.42)
     panel_bottom += len(subtitle_lines) * int(subtitle_size * 1.35)
     panel_bottom += int(height * 0.035)
     if badges:
@@ -884,7 +907,15 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
         (x1 - panel_pad, y1 - panel_pad, x2 + panel_pad, min(height - panel_pad, panel_bottom + panel_pad)),
         radius=max(18, int(width * 0.025)),
         fill=panel_fill,
+        outline=panel_outline,
+        width=max(1, int(width * 0.0015)),
     )
+
+    if editorial_square:
+        accent_h = max(4, int(height * 0.006))
+        accent_w = max(40, int(width * 0.055))
+        draw.rounded_rectangle((x1, y, x1 + accent_w, y + accent_h), radius=accent_h // 2, fill=accent_ink)
+        y += int(title_size * 0.42)
 
     for line in title_lines:
         draw.text((x1, y), line, font=title_font, fill=title_ink)
@@ -900,9 +931,15 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
         y += int(badge_size * 0.55)
         badge_x = x1
         for badge in badges:
-            fill = (20, 24, 32, 34) if bright else (255, 255, 255, 205)
-            ink = (42, 48, 60, 245) if bright else (26, 30, 40, 255)
-            used = _draw_pill(draw, (badge_x, y), badge, badge_font, fill, ink)
+            if editorial_square:
+                fill = (255, 255, 255, 70)
+                ink = (72, 58, 47, 245)
+                outline = (146, 113, 82, 112)
+            else:
+                fill = (20, 24, 32, 34) if bright else (255, 255, 255, 205)
+                ink = (42, 48, 60, 245) if bright else (26, 30, 40, 255)
+                outline = None
+            used = _draw_pill(draw, (badge_x, y), badge, badge_font, fill, ink, outline=outline)
             badge_x += used + int(badge_size * 0.45)
             if badge_x > x2 - int(width * 0.12):
                 break
@@ -910,8 +947,12 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
 
     if cta:
         y += int(cta_size * 0.3)
-        cta_fill = (24, 29, 39, 235) if bright else (255, 255, 255, 235)
-        cta_ink = (255, 255, 255, 255) if bright else (22, 27, 38, 255)
+        if editorial_square:
+            cta_fill = (38, 31, 27, 238)
+            cta_ink = (255, 249, 240, 255)
+        else:
+            cta_fill = (24, 29, 39, 235) if bright else (255, 255, 255, 235)
+            cta_ink = (255, 255, 255, 255) if bright else (22, 27, 38, 255)
         _draw_pill(draw, (x1, y), cta, cta_font, cta_fill, cta_ink)
 
     out = Image.alpha_composite(img, overlay).convert("RGB")
