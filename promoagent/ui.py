@@ -12,6 +12,7 @@ from typing import Any, Generator
 # Rich imports
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Prompt
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -287,6 +288,31 @@ def interactive_select_platforms() -> list[str]:
         # Fallback to simple input
         console.print("[dim]Install 'inquirer' for interactive selection: pip install inquirer[/]")
         return ['all']
+
+
+def ask_for_clarifications(gaps: list[str]) -> dict[str, str]:
+    """Ask the user to fill information gaps surfaced by the research stage.
+
+    Each gap is prompted in turn; empty answers are skipped. Prompts render on
+    the stderr ``console`` so ``--json`` stdout stays clean.
+    """
+    if not gaps:
+        return {}
+
+    console.print(Panel(
+        "\n".join(f"• {g}" for g in gaps),
+        title="[bold yellow]信息缺口[/]",
+        border_style="yellow",
+    ))
+    console.print("[dim]补充后可提升推广质量，直接回车跳过不需要的问题。[/]")
+
+    answers: dict[str, str] = {}
+    for gap in gaps:
+        # console=console routes prompt + echo to stderr, keeping stdout clean.
+        answer = Prompt.ask(f"  {gap}", default="", console=console)
+        if answer.strip():
+            answers[gap] = answer.strip()
+    return answers
 
 
 class LiveProgress:

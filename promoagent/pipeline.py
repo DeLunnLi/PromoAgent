@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .ai import ai_config, dispatch_chat, parse_json_content
+from .examples import find_examples, format_examples_for_prompt
 from .logger import logger
 from .platforms import get_platform, to_prompt_dict, get_primary_platforms
 
@@ -88,6 +89,31 @@ def _source_id(result: dict[str, Any]) -> str:
     return hashlib.sha256(content).hexdigest()[:16]
 
 
+def _classify_example_source(examples: list[str]) -> str:
+    """Classify where reference examples came from, for state metadata."""
+    if not examples:
+        return "none"
+    # find_examples falls back to AI generation when no search key is present;
+    # otherwise results came from Tavily/Exa. We cannot tell the exact provider
+    # after the fact, so "search" covers any non-empty web/AI result.
+    return "search"
+
+
+def _gather_references(result: dict[str, Any], options: dict[str, Any] | None) -> dict[str, Any]:
+    """Search for reference ads/examples; never raises."""
+    try:
+        examples = find_examples(result, platform="all", ai_options=options, verbose=False)
+    except Exception as exc:  # noqa: BLE001 — search must never break research
+        logger.warning("reference search failed", error=str(exc))
+        examples = []
+    return {
+        "examples": examples,
+        "searched": True,
+        "source": _classify_example_source(examples),
+        "timestamp": time.time(),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Stage 1: RESEARCH - Extract facts and strategy
 # ---------------------------------------------------------------------------
@@ -97,10 +123,13 @@ def stage_research(
     state: PipelineState,
     options: dict[str, Any] | None = None,
     force: bool = False,
+    search: bool = True,
 ) -> dict[str, Any]:
     """Research stage: Extract facts, positioning, and strategy in one call.
 
-    Combines previous analysis + strategy stages for efficiency.
+    When ``search`` is true, reference ads are fetched via :func:`find_examples`
+    and injected into the prompt. Results are stored under ``state["references"]``
+    so downstream stages and ``--resume`` can reuse them without re-searching.
     """
     if not force and state.has("research"):
         logger.info("using cached research stage")
@@ -109,6 +138,14 @@ def stage_research(
     config = ai_config(options)
     project = result.get("project", {})
     evidence = result.get("evidence", {})
+
+    # Gather reference ads (skipped when --no-search). On force, re-search.
+    if search:
+        references = _gather_references(result, options)
+    else:
+        references = {"examples": [], "searched": False, "source": "disabled", "timestamp": time.time()}
+    state.set("references", references)
+    references_block = format_examples_for_prompt(references["examples"])
 
     # Build concise source summary
     source_summary = {
@@ -125,10 +162,11 @@ def stage_research(
 只使用来源中明确的信息，标记缺失部分。
 输出严格 JSON。"""
 
+    references_section = f"\n{references_block}\n" if references_block else ""
     user_prompt = f"""分析以下项目/内容，提取关键信息并制定推广策略：
 
 {json.dumps(source_summary, ensure_ascii=False, indent=2)}
-
+{references_section}
 请输出以下格式的 JSON：
 {{
   "facts": {{
@@ -301,6 +339,21 @@ def stage_blueprint(
 每个元素要有明确目的和字数限制，为关键元素提供多个变体。
 输出严格 JSON。"""
 
+    # Optional context blocks: reference ads + user clarifications.
+    references_block = ""
+    refs = state.get("references")
+    if refs and refs.get("examples"):
+        references_block = format_examples_for_prompt(refs["examples"])
+
+    clarifications_block = ""
+    clar = state.get("clarifications")
+    if clar and clar.get("answers"):
+        lines = [f"- 问题: {q}\n  补充: {a}" for q, a in clar["answers"].items()]
+        clarifications_block = "用户补充信息（请优先纳入这些事实，不要与来源冲突时忽略参考示例）：\n" + "\n".join(lines)
+
+    context_blocks = "\n\n".join(b for b in (references_block, clarifications_block) if b)
+    context_section = f"\n{context_blocks}\n" if context_blocks else ""
+
     user_prompt = f"""基于以下研究和策略，生成 Blueprint 结构化内容：
 
 项目名称：{project.get('name', 'N/A')}
@@ -308,7 +361,7 @@ def stage_blueprint(
 核心主张：{facts.get('core_claim', 'N/A')}
 主推角度：{strategy.get('creative_direction', {}).get('main_hook', 'N/A')}
 钩子变体：{json.dumps(strategy.get('creative_direction', {}).get('hook_variants', []), ensure_ascii=False)}
-
+{context_section}
 需要生成的内容元素：
 {json.dumps(element_specs, ensure_ascii=False, indent=2)}
 
@@ -738,6 +791,7 @@ def run_pipeline(
     options: dict[str, Any] | None = None,
     stop_after: str | None = None,
     state: PipelineState | None = None,
+    search: bool = True,
 ) -> dict[str, Any]:
     """Run the complete pipeline.
 
@@ -746,6 +800,7 @@ def run_pipeline(
         options: Generation options
         stop_after: Stop after this stage for interactive editing
         state: Optional existing state for resuming
+        search: Whether to search reference ads during research
 
     Returns:
         All stage outputs
@@ -756,7 +811,7 @@ def run_pipeline(
     outputs = {}
 
     # Stage 1: Research
-    outputs["research"] = stage_research(result, state, options)
+    outputs["research"] = stage_research(result, state, options, search=search)
     if stop_after == "research":
         return outputs
 

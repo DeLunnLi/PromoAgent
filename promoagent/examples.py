@@ -375,7 +375,13 @@ def find_examples(
 # Format examples for prompt injection
 # ---------------------------------------------------------------------------
 
-# NOTE: format_examples_for_prompt() previously lived in promo_prompts.py,
-# which was removed during the v0.4 draft-pipeline refactor. The new
-# pipeline (promoagent.pipeline) injects examples inline and no longer
-# consumes this helper, so the re-export is intentionally dropped.
+def format_examples_for_prompt(examples: list[str]) -> str:
+    """Format reference examples into a prompt fragment.
+
+    Returns an empty string for an empty list so callers can unconditionally
+    interpolate the result without producing stray headings.
+    """
+    if not examples:
+        return ""
+    blocks = [f"--- 参考示例 {i + 1} ---\n{ex}" for i, ex in enumerate(examples)]
+    return "参考广告/示例（仅作风格参考，不要复制内容）：\n" + "\n\n".join(blocks)

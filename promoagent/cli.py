@@ -5,12 +5,13 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from . import __version__
 from .analyzer import analyze_target
-from .ui import console, print_banner, print_success, print_error, print_warning, print_info, print_tip, print_code, print_analysis_result, print_promo_result, print_optimize_manifest, print_platforms_table, progress_spinner
+from .ui import console, print_banner, print_success, print_error, print_warning, print_info, print_tip, print_code, print_analysis_result, print_promo_result, print_optimize_manifest, print_platforms_table, progress_spinner, ask_for_clarifications
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -61,6 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
     draft.add_argument("--parallel", action="store_true", default=True, help="Parallel platform generation.")
     draft.add_argument("--platforms", help="Comma-separated list of target platforms.")
     draft.add_argument("--image", action="store_true", help="Generate cover images.")
+    draft.add_argument("--no-search", action="store_true", help="Skip reference ad search during research.")
     draft.add_argument("--output-dir", default="launch-assets", help="Output directory for files.")
     draft.add_argument("--json", action="store_true", help="Output as JSON.")
     draft.add_argument("-o", "--output", help="Output file.")
@@ -142,7 +144,8 @@ def _run_analyze(args: argparse.Namespace) -> int:
 
 
 def _run_serve(args: argparse.Namespace) -> int:
-    print_error("Web UI is temporarily unavailable. Use `promoagent draft` command instead.")
+    print_error("Web UI is temporarily unavailable. Use `promoagent draft` for content generation.")
+    print_info("For AI tool integration (Claude Desktop / Cursor), use the MCP server: promoagent-mcp")
     return 1
 
 
@@ -286,9 +289,28 @@ def _run_draft(args: argparse.Namespace) -> int:
             print_promo_result(produce.get("data", {}))
         return 0
 
-    # Run pipeline
+    # Run research first so we can surface gaps before blueprint.
     stop_after = args.stage if args.stage != "all" else None
-    outputs = run_pipeline(result, options, stop_after=stop_after, state=state)
+    do_search = not args.no_search
+    research_out = stage_research(result, state, options, search=do_search)
+    outputs = {"research": research_out}
+
+    # Interactive clarification: ask about research gaps before producing the
+    # blueprint. Only in interactive, non-JSON mode, and only once per state.
+    if (args.interactive and not args.json
+            and stop_after != "research"
+            and not state.has("clarifications")):
+        gaps = (research_out.get("data", {}) or {}).get("facts", {}).get("gaps", []) or []
+        if gaps:
+            print_info(f"Research surfaced {len(gaps)} information gap(s). Let's clarify.")
+            answers = ask_for_clarifications(gaps)
+            state.set("clarifications", {"answers": answers, "timestamp": time.time()})
+
+    # Continue to blueprint + produce. research is cached in state, so
+    # run_pipeline will skip re-running it (and re-searching references).
+    if stop_after != "research":
+        rest = run_pipeline(result, options, stop_after=stop_after, state=state, search=do_search)
+        outputs.update({k: v for k, v in rest.items() if k != "research"})
 
     # Handle interactive mode at blueprint stage
     if args.stage == "blueprint" or (args.interactive and "blueprint" in outputs):

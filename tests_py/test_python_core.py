@@ -407,7 +407,8 @@ class PythonCoreTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             state = PipelineState("research-src", cache_dir=Path(tmp))
-            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch), \
+                 patch.object(pipeline, "find_examples", lambda result_arg, **kw: []):
                 out1 = stage_research(result, state, options={"api_key": "k"})
                 out2 = stage_research(result, state)  # should hit cache
 
@@ -427,10 +428,90 @@ class PythonCoreTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             state = PipelineState("research-force", cache_dir=Path(tmp))
-            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch), \
+                 patch.object(pipeline, "find_examples", lambda result_arg, **kw: []):
                 stage_research(result, state, options={"api_key": "k"})
                 stage_research(result, state, force=True)
         self.assertEqual(len(calls), 2)
+
+    def test_stage_research_injects_references(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        refs = ["【爆款案例】\n这是参考广告内容"]
+        captured = {}
+
+        def fake_dispatch(messages, config):
+            captured["user_prompt"] = messages[-1]["content"]
+            return json.dumps(_research_payload(), ensure_ascii=False)
+
+        def fake_find(result_arg, **kwargs):
+            return refs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("research-refs", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch), \
+                 patch.object(pipeline, "find_examples", fake_find):
+                out = stage_research(result, state, options={"api_key": "k"})
+
+        self.assertTrue(state.has("references"))
+        self.assertEqual(state.get("references")["examples"], refs)
+        self.assertEqual(state.get("references")["source"], "search")
+        self.assertIn("参考广告/示例", captured["user_prompt"])
+        self.assertIn("这是参考广告内容", captured["user_prompt"])
+
+    def test_stage_research_no_search_skips_find(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        find_calls = []
+
+        def fake_find(result_arg, **kwargs):
+            find_calls.append(kwargs)
+            return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("research-nosearch", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat",
+                              lambda m, c: json.dumps(_research_payload(), ensure_ascii=False)), \
+                 patch.object(pipeline, "find_examples", fake_find):
+                stage_research(result, state, options={"api_key": "k"}, search=False)
+
+        self.assertEqual(find_calls, [], "find_examples must not be called with search=False")
+        self.assertEqual(state.get("references")["source"], "disabled")
+        self.assertFalse(state.get("references")["searched"])
+
+    def test_stage_research_find_failure_is_silent(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+
+        def boom(result_arg, **kwargs):
+            raise RuntimeError("network down")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("research-fail", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat",
+                              lambda m, c: json.dumps(_research_payload(), ensure_ascii=False)), \
+                 patch.object(pipeline, "find_examples", boom):
+                out = stage_research(result, state, options={"api_key": "k"})
+
+        # Research still completes; references empty but recorded.
+        self.assertEqual(out["stage"], "research")
+        self.assertEqual(state.get("references")["examples"], [])
+        self.assertTrue(state.get("references")["searched"])
+
+    def test_stage_research_cache_hit_no_search(self):
+        """Cached research must not re-run find_examples."""
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        find_calls = []
+
+        def fake_find(result_arg, **kwargs):
+            find_calls.append(kwargs)
+            return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("research-cache", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat",
+                              lambda m, c: json.dumps(_research_payload(), ensure_ascii=False)), \
+                 patch.object(pipeline, "find_examples", fake_find):
+                stage_research(result, state, options={"api_key": "k"})
+                stage_research(result, state)  # cache hit
+        self.assertEqual(len(find_calls), 1, "cache hit should not re-search")
 
     # ------------------------------------------------------------------
     # Pipeline: stage_blueprint
@@ -467,6 +548,60 @@ class PythonCoreTest(unittest.TestCase):
                 stage_blueprint(research, state, result, options={"api_key": "k"})
                 stage_blueprint(research, state, result)
         self.assertEqual(len(calls), 1)
+
+    def test_stage_blueprint_reads_clarifications(self):
+        research = {"data": _research_payload()}
+        result = {"project": {"name": "Test"}}
+        captured = {}
+
+        def fake_dispatch(m, c):
+            captured["prompt"] = m[-1]["content"]
+            return json.dumps(_blueprint_payload(), ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("bp-clar", cache_dir=Path(tmp))
+            state.set("clarifications", {"answers": {"目标用户是谁": "独立开发者"}, "timestamp": 0})
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                stage_blueprint(research, state, result, options={"api_key": "k"})
+
+        self.assertIn("用户补充信息", captured["prompt"])
+        self.assertIn("独立开发者", captured["prompt"])
+        self.assertIn("目标用户是谁", captured["prompt"])
+
+    def test_stage_blueprint_no_clarifications_omits_block(self):
+        research = {"data": _research_payload()}
+        result = {"project": {"name": "Test"}}
+        captured = {}
+
+        def fake_dispatch(m, c):
+            captured["prompt"] = m[-1]["content"]
+            return json.dumps(_blueprint_payload(), ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("bp-noclar", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                stage_blueprint(research, state, result, options={"api_key": "k"})
+
+        self.assertNotIn("用户补充信息", captured["prompt"])
+
+    def test_stage_blueprint_reads_references(self):
+        research = {"data": _research_payload()}
+        result = {"project": {"name": "Test"}}
+        captured = {}
+
+        def fake_dispatch(m, c):
+            captured["prompt"] = m[-1]["content"]
+            return json.dumps(_blueprint_payload(), ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("bp-refs", cache_dir=Path(tmp))
+            state.set("references", {"examples": ["【案例】\n参考广告正文"], "searched": True,
+                                     "source": "search", "timestamp": 0})
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                stage_blueprint(research, state, result, options={"api_key": "k"})
+
+        self.assertIn("参考广告/示例", captured["prompt"])
+        self.assertIn("参考广告正文", captured["prompt"])
 
     # ------------------------------------------------------------------
     # Pipeline: blueprint editing
@@ -718,6 +853,13 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("--stage", result.stdout)
         self.assertIn("blueprint", result.stdout)
 
+    def test_python_cli_draft_help_includes_no_search(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "promoagent", "draft", "--help"],
+            cwd=ROOT, text=True, capture_output=True, check=True,
+        )
+        self.assertIn("--no-search", result.stdout)
+
     def test_python_cli_serve_reports_unavailable(self):
         result = subprocess.run(
             [sys.executable, "-m", "promoagent", "serve"],
@@ -789,6 +931,18 @@ class PythonCoreTest(unittest.TestCase):
             for k, v in env_backup.items():
                 if v is not None:
                     os.environ[k] = v
+
+    def test_format_examples_for_prompt(self):
+        from promoagent.examples import format_examples_for_prompt
+        formatted = format_examples_for_prompt(["案例一内容", "案例二内容"])
+        self.assertIn("参考广告/示例", formatted)
+        self.assertIn("参考示例 1", formatted)
+        self.assertIn("参考示例 2", formatted)
+        self.assertIn("不要复制内容", formatted)
+
+    def test_format_examples_empty(self):
+        from promoagent.examples import format_examples_for_prompt
+        self.assertEqual(format_examples_for_prompt([]), "")
 
     # ------------------------------------------------------------------
     # Image generation
@@ -1203,6 +1357,33 @@ class PythonCoreTest(unittest.TestCase):
         start = time.time()
         time.sleep(0.01)
         log_duration("quick_op", start, items=10)
+
+    # ------------------------------------------------------------------
+    # Clarification UI
+    # ------------------------------------------------------------------
+
+    def test_ask_for_clarifications_skips_empty(self):
+        from promoagent.ui import ask_for_clarifications, console as ui_console
+        from rich.prompt import Prompt
+
+        answers_iter = iter(["独立开发者", "", "  "])
+        seen_consoles = []
+
+        def fake_ask(prompt, **kwargs):
+            seen_consoles.append(kwargs.get("console"))
+            return next(answers_iter)
+
+        with patch.object(Prompt, "ask", fake_ask):
+            result = ask_for_clarifications(["目标用户是谁", "可选跳过", "空白也跳过"])
+
+        # Only the non-empty answer is kept (after strip).
+        self.assertEqual(result, {"目标用户是谁": "独立开发者"})
+        # Every prompt must route through the stderr console to keep --json clean.
+        self.assertTrue(all(c is ui_console for c in seen_consoles))
+
+    def test_ask_for_clarifications_empty_gaps_returns_empty(self):
+        from promoagent.ui import ask_for_clarifications
+        self.assertEqual(ask_for_clarifications([]), {})
 
 
 # ---------------------------------------------------------------------------
