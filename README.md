@@ -18,11 +18,14 @@
 
 ## ✨ What is PromoAgent?
 
-PromoAgent is an **AI-powered promotion agent** that reads your source evidence (GitHub repos, PDFs, product descriptions) and generates platform-native marketing copy.
+PromoAgent is an **AI-powered promotion agent** that reads your source evidence (GitHub repos, PDFs, product descriptions, release notes) and turns it into campaign-ready copy, launch assets, and ad-image briefs.
 
 **Unlike other AI copywriters:**
 - ✅ **Evidence-first**: Analyzes your actual content before generating
 - ✅ **Multi-platform**: One input → tailored content for XHS, Twitter, LinkedIn, etc.
+- ✅ **Campaign planning**: Audience segments, channel fit, launch sequence, and creative variants
+- ✅ **Release-ready**: Translate README/CHANGELOG/release notes into user-facing announcements
+- ✅ **Ad creative briefs**: Generate platform-aware image prompts and overlay copy from the same evidence
 - ✅ **No hallucination**: All claims are traceable to source evidence
 - ✅ **Agent architecture**: MCP server, browser automation, API publishing
 
@@ -32,6 +35,9 @@ promoagent promote https://github.com/user/awesome-project --platform all --ai
 
 # Example: Generate ad copy from a product description
 promoagent promote "AI writing tool, $19/mo, boosts productivity 10x" --platform twitter,linkedin --ai
+
+# Example: Turn release notes into a launch/update campaign
+promoagent promote ./CHANGELOG.md --platform twitter,linkedin,producthunt --prompt-preset release --ai
 ```
 
 ---
@@ -264,6 +270,9 @@ like a Xiaohongshu creator cover instead of a corporate banner.
 These built-in image skills use a structured prompt-spec approach inspired by the
 [GPT-Image2-Skill](https://github.com/wuyoscar/GPT-Image2-Skill) gallery/craft workflow:
 canvas and layout first, then concrete scene systems, material, lighting, palette, and checks.
+The generator treats the AI image as a clean campaign background plate and renders final
+headline/CTA typography locally, so the subject stays out of the copy-safe zone and Chinese
+text remains crisp.
 
 For non-interactive runs, pass the ad copy directly:
 

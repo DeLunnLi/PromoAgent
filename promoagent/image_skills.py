@@ -9,7 +9,9 @@ _GLOBAL_CRAFT = (
     "Put canvas/aspect ratio and layout contract before decorative detail.",
     "Use concrete scene nouns and visible subsystems instead of vague quality adjectives.",
     "Separate materials, lighting, palette, composition, and output checks.",
+    "Treat the copy-safe zone as a hard subject-exclusion zone, not optional empty space.",
     "Keep readable marketing copy out of the model image; PromoAgent renders final text locally.",
+    "Make each variant test a different hook hypothesis, not just a color or camera change.",
 )
 
 _SKILLS: dict[str, dict[str, Any]] = {
@@ -355,6 +357,9 @@ def image_skill_prompt_lines(skill: dict[str, Any], *, platform: str) -> list[st
         "prompt_mode": skill["promptMode"],
         "reference_route": list(skill["referenceRoute"]),
         **skill["schema"],
+        "text_overlay_contract": "PromoAgent adds final typography locally; generated image must reserve a clean low-detail background zone only.",
+        "subject_exclusion_contract": "No hero object, face, logo, QR code, UI focus, or high-contrast detail inside the copy-safe zone.",
+        "variant_contract": "If variants are requested, change the audience hook or conversion hypothesis, not just colors.",
         "material": skill["composition"],
         "lighting": skill["lighting"],
         "palette": skill["palette"],
@@ -366,6 +371,8 @@ def image_skill_prompt_lines(skill: dict[str, Any], *, platform: str) -> list[st
         "PROMO_RENDER_SPEC:",
         json.dumps(spec, ensure_ascii=False, indent=2),
         "Promotional hierarchy: first glance = subject/category; second glance = value promise; third glance = texture, proof cues, and platform-native detail.",
+        "Ad-tool benchmark: URL-to-ad workflow, platform-native creative, brand-safe background, and clear A/B-testing intent.",
+        "Overlay production contract: final words are a separate local typography layer; the model image should behave like a premium background plate.",
     ]
     lines.extend(f"Skill directive: {item}" for item in skill["directives"])
     lines.extend(f"Platform skill note: {item}" for item in _PLATFORM_EXTRA.get(platform_key, ()))

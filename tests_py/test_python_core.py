@@ -332,6 +332,22 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("qualityRubric", prompt)
         self.assertIn("npx repo-pulse .", build_evidence_brief(payload))
 
+    def test_prompt_schema_includes_campaign_planning_fields(self):
+        self.assertIn("taskMode", PROMO_JSON_SCHEMA)
+        self.assertIn("channelFit", PROMO_JSON_SCHEMA)
+        self.assertIn("creativeVariants", PROMO_JSON_SCHEMA)
+        self.assertIn("reviewGate", PROMO_JSON_SCHEMA)
+
+    def test_promo_user_prompt_includes_similar_task_workflow(self):
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        payload = {"project": result["project"], "evidence": result["evidence"], "source": result["source"]}
+        prompt = build_promo_user_prompt(payload, platform="all")
+
+        self.assertIn("判断任务模式", prompt)
+        self.assertIn("release_announcement", prompt)
+        self.assertIn("Product Hunt", prompt)
+        self.assertIn("creativeVariants", prompt)
+
     # ------------------------------------------------------------------
     # Optimize
     # ------------------------------------------------------------------
@@ -524,6 +540,8 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("Creative skill:", prompt)
         self.assertIn("PROMO_RENDER_SPEC", prompt)
         self.assertIn("Ad copy to reserve space", prompt)
+        self.assertIn("hard subject-exclusion", prompt)
+        self.assertIn("separate local typography overlay", prompt)
 
     def test_image_skills_are_listed_and_resolved(self):
         self.assertIn("b2b-saas", list_image_skills())
@@ -547,6 +565,7 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("Creative skill: xhs-lifestyle", prompt)
         self.assertIn("Xiaohongshu cover", prompt)
         self.assertIn("first glance", prompt)
+        self.assertIn("Ad-tool benchmark", prompt)
 
     def test_build_image_prompt_platform_dims(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
@@ -583,6 +602,7 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("one clear hero product", prompt)
         self.assertIn("square 1:1 card", prompt)
         self.assertIn("upper-left 42-48% wide copy-safe zone", prompt)
+        self.assertIn("Avoid placing the subject", prompt)
 
     def test_build_image_prompt_adapts_to_research_recommendation(self):
         result = analyze_free_text("一篇关于推荐系统冷启动问题的研究论文，包含实验、数据集和方法对比")
@@ -637,6 +657,8 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("推荐任务适配", prompt)
         self.assertIn("软件/工具", prompt)
         self.assertIn("本地生活/餐饮", prompt)
+        self.assertIn("相似任务模式", prompt)
+        self.assertIn("Ad Variant Test", prompt)
 
     def test_fetch_readme_images_returns_empty_when_no_urls(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)

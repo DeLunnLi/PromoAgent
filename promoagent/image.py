@@ -10,6 +10,7 @@ Two image sources:
 from __future__ import annotations
 
 import base64
+import colorsys
 import json
 import os
 import re
@@ -283,10 +284,28 @@ def _visual_text(value: Any, limit: int = 180) -> str:
 def _copy_safe_geometry(platform: str) -> str:
     fmt = _platform_format(platform)
     if fmt == "portrait":
-        return "Reserve a clean top 25-30% copy-safe zone with no hero objects, faces, logos, or strong detail."
+        return "Reserve a clean top 25-30% copy-safe zone as a hard subject-exclusion area: no hero objects, faces, logos, UI focus, or strong detail."
     if fmt == "landscape":
-        return "Reserve one side as a clean 40-45% copy-safe zone; keep the hero subject on the opposite side."
-    return "Reserve a clean compact upper-left 42-48% wide copy-safe zone; keep the hero subject entirely center-right or lower-right, outside that text area."
+        return "Reserve one side as a clean 40-45% copy-safe zone as a hard subject-exclusion area; keep the hero subject on the opposite side."
+    return "Reserve a clean compact upper-left 42-48% wide copy-safe zone as a hard subject-exclusion area; keep the hero subject entirely center-right or lower-right, outside that text area."
+
+
+def _layout_quality_contract(platform: str) -> str:
+    fmt = _platform_format(platform)
+    if fmt == "portrait":
+        return (
+            "Poster layout contract: top zone is quiet background for local title; lower two-thirds carries one oversized hero subject. "
+            "Subject bounding box must not enter the title zone, even partially."
+        )
+    if fmt == "landscape":
+        return (
+            "Poster layout contract: one-side copy lane stays quiet and low-contrast; opposite side carries the hero subject with clear silhouette. "
+            "Avoid centered subjects that would collide with local headline text."
+        )
+    return (
+        "Poster layout contract: compact upper-left copy panel stays quiet and low-detail; hero subject lives center-right or lower-right. "
+        "Avoid placing the subject, face, product label, or key UI inside the upper-left panel."
+    )
 
 
 def _bool_env(value: Any, default: bool = False) -> bool:
@@ -503,6 +522,7 @@ def build_image_prompt(
         f"Scene/backdrop: {profile['scene']}",
         f"Ad copy to reserve space for local overlay: headline '{overlay_title}', subhead '{overlay_subtitle}', CTA '{overlay_cta}'. Do not draw this text yourself.",
         f"Copy-safe geometry: {_copy_safe_geometry(platform_key)}",
+        _layout_quality_contract(platform_key),
         f"Platform fit: {guide['fit']}",
         f"Style/medium: {style}, {profile['style']}",
         f"Composition/framing: {guide['composition']}",
@@ -512,9 +532,10 @@ def build_image_prompt(
         "Lighting/mood: attractive, refined, optimistic, cinematic but believable, crisp contrast, no clutter.",
         "Color palette: sophisticated multi-color accents with one dominant neutral base; avoid neon rainbow overload.",
         "Materials/textures: tactile real-world surfaces, controlled reflections, crisp edges, believable depth.",
-        "Text: do not render readable words, QR codes, or watermarks; leave clean space for separate text overlay.",
+        "Text: do not render readable words, pseudo-letters, QR codes, subtitles, captions, price tags, watermarks, or UI copy; leave clean space for separate local typography overlay.",
         "Brand safety: do not show real app logos, social media logos, company logos, trademarked icons, or recognizable brand marks; use abstract unlabeled rounded tiles instead.",
-        "Composition rules: one unmistakable hero subject, clear foreground-midground-background separation, no tiny icon soup, no busy collage.",
+        "Composition rules: one unmistakable hero subject, clear foreground-midground-background separation, no tiny icon soup, no busy collage, no focal object under the reserved copy area.",
+        "Ad creative objective: make it look like a finished campaign background plate ready for crisp designer-set typography, not a poster where the image model attempted the lettering.",
         f"Constraints: visually distinctive, premium, platform-appropriate. Avoid: {profile['avoid']}",
     ]
     if ad_note:
@@ -713,24 +734,39 @@ def generate_openai_image(
 # Local ad text overlay
 # ---------------------------------------------------------------------------
 
-def _load_font(size: int) -> Any:
+def _load_font(size: int, weight: str = "regular") -> Any:
     try:
         from PIL import ImageFont
     except ImportError:  # pragma: no cover - guarded by caller
         return None
 
-    candidates = [
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-        "/Library/Fonts/Arial Unicode.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for path in candidates:
+    if weight == "bold":
+        candidates: list[tuple[str, int]] = [
+            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 2),
+            ("/System/Library/Fonts/PingFang.ttc", 8),
+            ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 0),
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 0),
+        ]
+    elif weight == "medium":
+        candidates = [
+            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 2),
+            ("/System/Library/Fonts/PingFang.ttc", 6),
+            ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0),
+        ]
+    else:
+        candidates = [
+            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+            ("/System/Library/Fonts/PingFang.ttc", 3),
+            ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
+            ("/Library/Fonts/Arial Unicode.ttf", 0),
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0),
+        ]
+    for path, index in candidates:
         if Path(path).exists():
             try:
-                return ImageFont.truetype(path, size=size)
-            except OSError:
+                return ImageFont.truetype(path, size=size, index=index)
+            except (OSError, TypeError):
                 continue
     return ImageFont.load_default()
 
@@ -763,12 +799,21 @@ def _wrap_visual_text(draw: Any, text: str, font: Any, max_width: int, max_lines
     return _wrap_visual_text_lines(draw, text, font, max_width)[:max_lines]
 
 
-def _fit_wrapped_font(draw: Any, text: str, start_size: int, min_size: int, max_width: int, max_lines: int) -> tuple[Any, list[str]]:
+def _fit_wrapped_font(
+    draw: Any,
+    text: str,
+    start_size: int,
+    min_size: int,
+    max_width: int,
+    max_lines: int,
+    *,
+    weight: str = "regular",
+) -> tuple[Any, list[str]]:
     size = start_size
-    best_font = _load_font(size)
+    best_font = _load_font(size, weight=weight)
     best_lines = _wrap_visual_text(draw, text, best_font, max_width, max_lines)
     while size > min_size:
-        font = _load_font(size)
+        font = _load_font(size, weight=weight)
         all_lines = _wrap_visual_text_lines(draw, text, font, max_width)
         lines = all_lines[:max_lines]
         too_many = len(all_lines) > max_lines
@@ -810,14 +855,38 @@ def _draw_pill(
     return pill_width
 
 
+def _sample_accent_color(image: Any) -> tuple[int, int, int]:
+    """Pick a restrained accent from the generated image for local typography."""
+    try:
+        sample = image.convert("RGB").resize((28, 28))
+    except Exception:  # noqa: BLE001
+        return (37, 99, 235)
+
+    buckets: dict[tuple[int, int, int], float] = {}
+    for r, g, b in sample.getdata():
+        h, lightness, saturation = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+        if saturation < 0.20 or lightness < 0.24 or lightness > 0.78:
+            continue
+        key = (min(255, (r // 32) * 32), min(255, (g // 32) * 32), min(255, (b // 32) * 32))
+        hue_balance = 0.8 + 0.2 * (1 - abs(h - 0.58))
+        buckets[key] = buckets.get(key, 0.0) + saturation * (1 - abs(lightness - 0.56)) * hue_balance
+
+    if not buckets:
+        return (37, 99, 235)
+    return max(buckets, key=buckets.get)
+
+
 def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str, Any]) -> bool:
     """Render crisp local ad copy over a generated visual."""
     if not brief.get("textOverlay", True):
         return False
 
-    title = _visual_text(brief.get("title"), 40)
-    subtitle = _visual_text(brief.get("subtitle"), 90)
-    cta = _visual_text(brief.get("cta"), 36)
+    fmt = _platform_format(platform)
+    title_limit = 28 if fmt == "square" else 40
+    subtitle_limit = 54 if fmt == "square" else 90
+    title = _visual_text(brief.get("title"), title_limit)
+    subtitle = _visual_text(brief.get("subtitle"), subtitle_limit)
+    cta = _visual_text(brief.get("cta"), 28 if fmt == "square" else 36)
     badges = [b for b in (brief.get("badges") or []) if b]
     if not any([title, subtitle, cta, badges]):
         return False
@@ -836,7 +905,6 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
 
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    fmt = _platform_format(platform)
 
     editorial_square = fmt == "square"
 
@@ -860,12 +928,13 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
         cta_size = max(17, min(26, int(width * 0.024)))
 
     bright = _region_is_bright(img, block)
+    accent_rgb = _sample_accent_color(img)
     if editorial_square:
-        panel_fill = (250, 244, 234, 174)
-        panel_outline = (255, 255, 255, 96)
-        title_ink = (35, 29, 24, 255)
-        body_ink = (82, 69, 58, 238)
-        accent_ink = (190, 126, 57, 235)
+        panel_fill = (252, 252, 248, 178)
+        panel_outline = (255, 255, 255, 110)
+        title_ink = (21, 24, 31, 255)
+        body_ink = (67, 72, 82, 238)
+        accent_ink = (*accent_rgb, 235)
     else:
         panel_fill = (255, 255, 255, 178) if not bright else (255, 255, 255, 118)
         panel_outline = None
@@ -884,14 +953,24 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
         max(28, int(title_size * 0.72)),
         max_text_width,
         2,
+        weight="bold",
     )
-    subtitle_font = _load_font(subtitle_size)
-    cta_font = _load_font(cta_size)
-    badge_font = _load_font(max(16, int(cta_size * 0.8)))
+    subtitle_lines_max = 1 if editorial_square else 2
+    subtitle_font, subtitle_lines = _fit_wrapped_font(
+        draw,
+        subtitle,
+        subtitle_size,
+        max(16, int(subtitle_size * 0.78)),
+        max_text_width,
+        subtitle_lines_max,
+        weight="regular",
+    )
+    cta_font = _load_font(cta_size, weight="bold")
+    badge_font = _load_font(max(16, int(cta_size * 0.8)), weight="medium")
 
     y = y1
-    subtitle_lines = _wrap_visual_text(draw, subtitle, subtitle_font, max_text_width, 2)
     title_size = int(getattr(title_font, "size", title_size))
+    subtitle_size = int(getattr(subtitle_font, "size", subtitle_size))
     panel_bottom = y + len(title_lines) * int(title_size * 1.12)
     if editorial_square:
         panel_bottom += int(title_size * 0.42)
@@ -933,8 +1012,8 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
         for badge in badges:
             if editorial_square:
                 fill = (255, 255, 255, 70)
-                ink = (72, 58, 47, 245)
-                outline = (146, 113, 82, 112)
+                ink = (42, 47, 58, 245)
+                outline = (*accent_rgb, 126)
             else:
                 fill = (20, 24, 32, 34) if bright else (255, 255, 255, 205)
                 ink = (42, 48, 60, 245) if bright else (26, 30, 40, 255)
@@ -948,8 +1027,8 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
     if cta:
         y += int(cta_size * 0.3)
         if editorial_square:
-            cta_fill = (38, 31, 27, 238)
-            cta_ink = (255, 249, 240, 255)
+            cta_fill = (23, 27, 35, 238)
+            cta_ink = (255, 255, 252, 255)
         else:
             cta_fill = (24, 29, 39, 235) if bright else (255, 255, 255, 235)
             cta_ink = (255, 255, 255, 255) if bright else (22, 27, 38, 255)
