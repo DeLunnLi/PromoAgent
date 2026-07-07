@@ -20,6 +20,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .image_skills import image_skill_prompt_lines, list_image_skills, resolve_image_skill
+
 # ---------------------------------------------------------------------------
 # Platform dimensions — derived from format, configurable via env
 # ---------------------------------------------------------------------------
@@ -344,8 +346,11 @@ def ask_image_brief_interactively(result: dict[str, Any], options: dict[str, Any
         return options
 
     current = image_brief(result, options=options)
+    skill_default = options.get("skill") or os.environ.get("PROMOAGENT_IMAGE_SKILL") or "auto"
+    skill_choices = ", ".join(["auto", *list_image_skills()])
     print("\n✦ 交互式广告生图 brief（直接回车使用默认值）", file=sys.stderr)
     prompts = [
+        ("skill", f"创意 skill（{skill_choices}）", skill_default),
         ("title", "广告标题", current.get("title", "")),
         ("subtitle", "副标题/核心卖点", current.get("subtitle", "")),
         ("cta", "CTA 按钮文案", current.get("cta", "")),
@@ -370,6 +375,7 @@ def build_image_prompt(
     *,
     platform: str = "xhs",
     style: str = "clean",
+    skill: str | None = None,
     brief: dict[str, Any] | None = None,
     variant: int = 1,
     variant_count: int = 1,
@@ -450,6 +456,8 @@ def build_image_prompt(
         "camera": "editorial camera angle with polished lighting.",
         "density": "one hero subject plus limited supporting detail.",
     })
+    creative_skill = resolve_image_skill(requested=skill, recommendation_kind=kind, platform=platform_key)
+    skill_lines = image_skill_prompt_lines(creative_skill, platform=platform_key)
 
     topic_str = ", ".join(topics[:4]) if topics else profile["category"]
     display_name = _visual_text(name, 80) or "Project"
@@ -479,6 +487,7 @@ def build_image_prompt(
         f"Recommendation category: {profile['category']}",
         f"Asset type: {guide['format']} for {platform_key}",
         f"Primary request: Create an ad-ready campaign visual for '{display_name}', not a generic illustration.",
+        *skill_lines,
         f"Source context: {desc_short}",
         f"{cta_hint}Topics: {topic_str}. Recommendation angle: {profile['angle']}",
         f"Subject cues: {feature_str}.",
@@ -976,6 +985,7 @@ def generate_platform_images(
     print(f"promoagent: image provider → {provider_label} ({cfg['model']})", file=sys.stderr)
 
     style = options.get("style") or effective_env.get("PROMOAGENT_IMAGE_STYLE") or "clean"
+    skill = options.get("skill") or effective_env.get("PROMOAGENT_IMAGE_SKILL") or "auto"
     brief = image_brief(result, options=options, env=effective_env)
     try:
         variants = max(1, min(6, int(options.get("variants") or effective_env.get("PROMOAGENT_IMAGE_VARIANTS") or 1)))
@@ -989,9 +999,15 @@ def generate_platform_images(
                     result,
                     platform=platform,
                     style=style,
+                    skill=skill,
                     brief=brief,
                     variant=variant,
                     variant_count=variants,
+                )
+                creative_skill = resolve_image_skill(
+                    requested=skill,
+                    recommendation_kind=_recommendation_kind(result),
+                    platform=platform,
                 )
                 ext = "png" if use_openai else "jpg"
                 variant_suffix = f"-v{variant}" if variants > 1 else ""
@@ -1007,6 +1023,7 @@ def generate_platform_images(
 
                 if apply_text_overlay(out_path, platform=platform, brief=brief):
                     meta["textOverlay"] = True
+                meta["skill"] = creative_skill["name"]
                 meta["prompt"] = prompt
                 meta["variant"] = variant
                 generated.append(meta)

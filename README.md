@@ -251,9 +251,16 @@ promoagent promote . \
 promoagent optimize . \
   --image \
   --image-platforms xhs,wechat \
+  --image-skill auto \
   --image-interactive \
   --image-variants 2
 ```
+
+`--image-skill auto` will choose a creative skill by recommendation type:
+`b2b-saas` for software/tools, `food-local` for restaurant and local lifestyle,
+`product-hero` for products, `event-poster` for events, `research-editorial` for papers,
+and `service-trust` for services/courses. Use `xhs-lifestyle` when the image should feel
+like a Xiaohongshu creator cover instead of a corporate banner.
 
 For non-interactive runs, pass the ad copy directly:
 
@@ -261,6 +268,7 @@ For non-interactive runs, pass the ad copy directly:
 promoagent optimize . \
   --image \
   --image-platforms xhs \
+  --image-skill b2b-saas \
   --image-title "一键把项目变成推广素材" \
   --image-subtitle "自动读证据，生成多平台文案和广告封面" \
   --image-cta "立即生成" \

@@ -74,6 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
     optimize.add_argument("--image-model", dest="image_model", help="Image model override.")
     optimize.add_argument("--image-platforms", dest="image_platforms", help="Comma-separated platforms for cover images.")
     optimize.add_argument("--image-style", dest="image_style", help="Visual style hint for cover images.")
+    optimize.add_argument("--image-skill", dest="image_skill", help="Creative image skill: auto, ad-cover, xhs-lifestyle, food-local, product-hero, event-poster, b2b-saas, research-editorial, service-trust.")
     optimize.add_argument("--image-interactive", action="store_true", help="Ask for ad image brief before generation.")
     optimize.add_argument("--image-title", dest="image_title", help="Ad headline rendered as local overlay.")
     optimize.add_argument("--image-subtitle", dest="image_subtitle", help="Ad subhead rendered as local overlay.")
@@ -220,6 +221,7 @@ def _run_optimize(args: argparse.Namespace) -> int:
                 "model": args.image_model,
                 "platforms": args.image_platforms,
                 "style": args.image_style,
+                "skill": args.image_skill,
                 "title": args.image_title,
                 "subtitle": args.image_subtitle,
                 "cta": args.image_cta,

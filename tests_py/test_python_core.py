@@ -20,6 +20,7 @@ from promoagent.publish import (
 from promoagent.analyzer import analyze_free_text, analyze_target, parse_github_owner_repo
 from promoagent.image import apply_text_overlay, build_image_prompt, fetch_readme_images, generate_openai_image, generate_platform_images, image_brief, image_config
 from promoagent.examples import detect_category, find_examples, format_examples_for_prompt
+from promoagent.image_skills import list_image_skills, resolve_image_skill
 from promoagent.interactive import has_significant_gaps, identify_gaps
 from promoagent.optimize import run_optimize
 from promoagent.promo_prompts import PROMO_JSON_SCHEMA, build_evidence_brief, build_promo_system_prompt, build_promo_user_prompt, expand_presets
@@ -520,7 +521,28 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("3:4", prompt)
         self.assertIn("poster", prompt)
         self.assertIn("ad-ready campaign visual", prompt)
+        self.assertIn("Creative skill:", prompt)
         self.assertIn("Ad copy to reserve space", prompt)
+
+    def test_image_skills_are_listed_and_resolved(self):
+        self.assertIn("b2b-saas", list_image_skills())
+        self.assertEqual(resolve_image_skill(requested="food", recommendation_kind="general")["name"], "food-local")
+        self.assertEqual(resolve_image_skill(requested="unknown", recommendation_kind="product")["name"], "product-hero")
+
+    def test_build_image_prompt_uses_explicit_creative_skill(self):
+        result = analyze_free_text("LuminaDesk 护眼桌面灯，三档色温，金属机身，售价299元")
+        prompt = build_image_prompt(result, platform="wechat", skill="product-hero")
+
+        self.assertIn("Creative skill: product-hero", prompt)
+        self.assertIn("Skill palette", prompt)
+        self.assertIn("fake brand logo", prompt)
+
+    def test_build_image_prompt_auto_uses_xhs_lifestyle_skill(self):
+        result = analyze_free_text("一个适合自由职业者的时间管理服务，帮助整理客户项目和报价")
+        prompt = build_image_prompt(result, platform="xhs", skill="auto")
+
+        self.assertIn("Creative skill: xhs-lifestyle", prompt)
+        self.assertIn("Xiaohongshu cover", prompt)
 
     def test_build_image_prompt_platform_dims(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
@@ -663,6 +685,7 @@ class PythonCoreTest(unittest.TestCase):
                         "base_url": server.base_url,
                         "api_key": "test-key",   # api_key in options → picked up by image_config
                         "model": "test-model",
+                        "skill": "b2b-saas",
                         "poll_interval_ms": 10,
                         "timeout_ms": 5000,
                     },
@@ -671,6 +694,7 @@ class PythonCoreTest(unittest.TestCase):
                 ai_images = [img for img in images if img.get("provider") == "modelscope"]
                 self.assertTrue(len(ai_images) >= 1)
                 self.assertTrue(Path(ai_images[0]["outputPath"]).exists())
+                self.assertEqual(ai_images[0]["skill"], "b2b-saas")
         finally:
             server.stop()
 
