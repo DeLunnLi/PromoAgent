@@ -207,7 +207,15 @@ pip install -e ".[web,fill,mcp,ocr]"
 
 ## 🤖 MCP Server Integration
 
-Use PromoAgent directly in Claude Desktop:
+Use PromoAgent directly inside AI tools (Claude Desktop, Cursor, etc.) via the
+Model Context Protocol. Install the MCP extra, then point your tool at the
+`promoagent-mcp` command:
+
+```bash
+pip install "promoagent[mcp]"
+```
+
+Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
 ```json
 {
@@ -219,15 +227,42 @@ Use PromoAgent directly in Claude Desktop:
 }
 ```
 
-Then simply ask:
-> "Analyze https://github.com/owner/repo and generate Xiaohongshu and Twitter content"
+Then ask naturally:
+> "Analyze https://github.com/owner/repo and draft Xiaohongshu + Twitter content.
+> Show me the blueprint first so I can edit it before producing."
 
-**Available Tools:**
-- `pa_analyze` - Analyze any source
-- `pa_promote` - Generate promotional copy
-- `pa_optimize` - Create launch-assets folder
-- `pa_refine` - Iterate on content
-- `pa_check_risks` - Validate launch readiness
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `s2l_analyze(target)` | Analyze a source (GitHub URL / local path / file / free text); returns evidence + a `source_id` handle. |
+| `s2l_list_platforms()` | List supported platforms with format, style, and API-support flags. |
+| `s2l_research(target, search=True)` | Run the research stage: extract facts, strategy, and information gaps. Returns `source_id`. |
+| `s2l_blueprint(source_id)` | Generate the editable blueprint (content elements + variants) from research. |
+| `s2l_edit_blueprint(source_id, edits)` | Apply edits (content updates, variant selection, reorder, add/remove element, set structure). Returns a markdown preview. |
+| `s2l_produce(source_id, platforms?)` | Generate platform-native content from the blueprint. |
+| `s2l_draft(target, platforms?, search=True)` | One-shot full pipeline (research → blueprint → produce). |
+
+### Two Ways to Use It
+
+**One-shot** — when you just want the content:
+
+```
+s2l_draft("https://github.com/owner/repo", platforms=["xiaohongshu", "twitter"])
+```
+
+**Staged** — when you want to inspect and edit the blueprint first (the AI
+tool's UI is great for this):
+
+```
+1. s2l_research("https://github.com/owner/repo")        → source_id + gaps
+2. s2l_blueprint(source_id)                              → elements + variants
+3. s2l_edit_blueprint(source_id, {"hook-main": "新钩子"}) → preview
+4. s2l_produce(source_id, platforms=["xiaohongshu"])     → final content
+```
+
+State persists across calls via `source_id`, so you can step through and edit
+without re-running earlier stages.
 
 ---
 

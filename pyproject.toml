@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "promoagent"
-version = "0.3.0"
+version = "0.4.0"
 description = "AI Promotion Agent for Launches, Ads, and Multi-Platform Copy"
 readme = "README.md"
 requires-python = ">=3.10"
