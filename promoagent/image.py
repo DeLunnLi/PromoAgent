@@ -151,27 +151,36 @@ def build_image_prompt(result: dict[str, Any], *, platform: str = "xhs", style: 
     topics = project.get("topics") or []
     install_cmd = project.get("installCommand", "")
 
-    fmt = {
-        "xhs": "vertical 3:4 poster",
-        "xiaohongshu": "vertical 3:4 poster",
-        "wechat": "square 1:1 card",
-        "zhihu": "wide 16:9 header image",
-        "twitter": "wide Twitter card",
-        "linkedin": "wide LinkedIn banner",
-    }.get(platform, "square card")
+    # Platform-specific format hints
+    fmt_hints = {
+        "xhs": {"fmt": "vertical 3:4 poster", "mood": "vibrant, eye-catching, social media ready"},
+        "xiaohongshu": {"fmt": "vertical 3:4 poster", "mood": "vibrant, aesthetic, lifestyle"},
+        "wechat": {"fmt": "square 1:1 card", "mood": "professional, trustworthy, elegant"},
+        "zhihu": {"fmt": "wide 16:9 header", "mood": "intellectual, technical, informative"},
+        "twitter": {"fmt": "wide 16:9 card", "mood": "bold, attention-grabbing, modern"},
+        "linkedin": {"fmt": "wide 16:9 banner", "mood": "corporate, professional, polished"},
+    }
+
+    platform_hint = fmt_hints.get(platform, {"fmt": "square card", "mood": "modern, professional"})
 
     topic_str = ", ".join(topics[:4]) if topics else "open source software"
-    desc_short = (desc[:120] + "…") if len(desc) > 120 else desc
+    desc_short = (desc[:100] + "...") if len(desc) > 100 else desc
     cmd_hint = f"Key command: `{install_cmd}`. " if install_cmd else ""
 
+    # Quality-focused prompt
     return (
-        f"Professional tech launch poster for '{name}'. "
-        f"{desc_short} "
+        f"Create a high-quality promotional poster for '{name}'. "
+        f"{desc_short}. "
         f"{cmd_hint}"
-        f"Topics: {topic_str}. "
-        f"Visual style: {style}, modern, clean, developer-friendly, dark or light background. "
-        f"Format: {fmt}. "
-        f"No misleading metrics, no fake charts, no stock photos."
+        f"Key themes: {topic_str}. "
+        f"Style: {style}, {platform_hint['mood']}, minimalist design, "
+        f"professional lighting, sharp details, 8k quality, "
+        f"abstract geometric shapes, gradient background, "
+        f"tech-inspired visuals, clean composition. "
+        f"Format: {platform_hint['fmt']}. "
+        f"IMPORTANT: No text, no letters, no numbers, no UI elements, "
+        f"no screenshots, no fake charts, no watermarks. "
+        f"Pure visual design only - text will be added separately."
     )
 
 
