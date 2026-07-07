@@ -522,6 +522,7 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("poster", prompt)
         self.assertIn("ad-ready campaign visual", prompt)
         self.assertIn("Creative skill:", prompt)
+        self.assertIn("PROMO_RENDER_SPEC", prompt)
         self.assertIn("Ad copy to reserve space", prompt)
 
     def test_image_skills_are_listed_and_resolved(self):
@@ -534,7 +535,9 @@ class PythonCoreTest(unittest.TestCase):
         prompt = build_image_prompt(result, platform="wechat", skill="product-hero")
 
         self.assertIn("Creative skill: product-hero", prompt)
-        self.assertIn("Skill palette", prompt)
+        self.assertIn("product-render-config", prompt)
+        self.assertIn("reference_route", prompt)
+        self.assertIn("Product & Food", prompt)
         self.assertIn("fake brand logo", prompt)
 
     def test_build_image_prompt_auto_uses_xhs_lifestyle_skill(self):
@@ -543,6 +546,7 @@ class PythonCoreTest(unittest.TestCase):
 
         self.assertIn("Creative skill: xhs-lifestyle", prompt)
         self.assertIn("Xiaohongshu cover", prompt)
+        self.assertIn("first glance", prompt)
 
     def test_build_image_prompt_platform_dims(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
@@ -585,6 +589,8 @@ class PythonCoreTest(unittest.TestCase):
 
         self.assertIn("research/document recommendation", prompt)
         self.assertIn("method clarity", prompt)
+        self.assertIn("research-diagram-grammar", prompt)
+        self.assertIn("diagram_grammar", prompt)
         self.assertIn("senior art director", prompt)
         self.assertIn("wide 16:9 header image", prompt)
 

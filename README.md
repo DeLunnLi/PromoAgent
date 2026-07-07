@@ -261,6 +261,9 @@ promoagent optimize . \
 `product-hero` for products, `event-poster` for events, `research-editorial` for papers,
 and `service-trust` for services/courses. Use `xhs-lifestyle` when the image should feel
 like a Xiaohongshu creator cover instead of a corporate banner.
+These built-in image skills use a structured prompt-spec approach inspired by the
+[GPT-Image2-Skill](https://github.com/wuyoscar/GPT-Image2-Skill) gallery/craft workflow:
+canvas and layout first, then concrete scene systems, material, lighting, palette, and checks.
 
 For non-interactive runs, pass the ad copy directly:
 
