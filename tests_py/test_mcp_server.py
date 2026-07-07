@@ -17,7 +17,8 @@ import promoagent.mcp_server as mcp_server
 import promoagent.pipeline as pipeline
 from promoagent.mcp_server import (
     _impl_analyze, _impl_list_platforms, _impl_research, _impl_blueprint,
-    _impl_edit_blueprint, _impl_produce, _impl_draft, create_server,
+    _impl_edit_blueprint, _impl_produce, _impl_draft,
+    _impl_image_brief, _impl_build_image_prompt, create_server,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -191,6 +192,47 @@ class TestMcpServer(_StateIsolationMixin, unittest.TestCase):
         self.assertFalse(out["ok"])
 
     # ------------------------------------------------------------------
+    # Image prompt tools
+    # ------------------------------------------------------------------
+
+    def test_s2l_image_brief_returns_fields(self):
+        with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp):
+            sid = _impl_analyze(str(FIXTURES / "healthy-repo"))["source_id"]
+            out = _impl_image_brief(sid, title="测试标题", cta="立即了解", badges="护眼,金属")
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["brief"]["title"], "测试标题")
+        self.assertEqual(out["brief"]["cta"], "立即了解")
+        self.assertIn("护眼", out["brief"]["badges"])
+
+    def test_s2l_image_brief_missing_result_errors(self):
+        with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp):
+            out = _impl_image_brief("nonexistent-source-id")
+        self.assertFalse(out["ok"])
+
+    def test_s2l_build_image_prompt_returns_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp):
+            sid = _impl_analyze(str(FIXTURES / "healthy-repo"))["source_id"]
+            # model="dall-e-3" forces the English structured-prompt branch.
+            out = _impl_build_image_prompt(sid, platform="xhs", model="dall-e-3")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["prompt"])
+        self.assertIn("3:4", out["prompt"])  # xhs portrait
+        self.assertEqual(out["platform"], "xhs")
+
+    def test_s2l_build_image_prompt_chinese_model(self):
+        with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp):
+            sid = _impl_analyze(str(FIXTURES / "healthy-repo"))["source_id"]
+            out = _impl_build_image_prompt(sid, platform="xhs", model="Qwen/Qwen-Image")
+        self.assertTrue(out["ok"], out)
+        self.assertIn("小红书封面", out["prompt"])  # Chinese branch
+        self.assertNotIn("PROMO_RENDER_SPEC", out["prompt"])
+
+    def test_s2l_build_image_prompt_missing_result_errors(self):
+        with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp):
+            out = _impl_build_image_prompt("nonexistent-source-id", platform="xhs")
+        self.assertFalse(out["ok"])
+
+    # ------------------------------------------------------------------
     # One-shot draft
     # ------------------------------------------------------------------
 
@@ -236,6 +278,8 @@ class TestMcpServer(_StateIsolationMixin, unittest.TestCase):
             payloads.append(_impl_edit_blueprint(sid, {"hook-main": "x"}))
             payloads.append(_impl_produce(sid))
             payloads.append(_impl_draft(str(FIXTURES / "healthy-repo"), search=False))
+            payloads.append(_impl_image_brief(sid, title="t"))
+            payloads.append(_impl_build_image_prompt(sid, platform="xhs", model="dall-e-3"))
         for p in payloads:
             json.dumps(p)  # raises if not serializable
 
@@ -247,8 +291,9 @@ class TestMcpServer(_StateIsolationMixin, unittest.TestCase):
         server = create_server()
         tools = sorted(server._tool_manager._tools.keys())
         self.assertEqual(tools, [
-            "s2l_analyze", "s2l_blueprint", "s2l_draft", "s2l_edit_blueprint",
-            "s2l_list_platforms", "s2l_produce", "s2l_research",
+            "s2l_analyze", "s2l_blueprint", "s2l_build_image_prompt", "s2l_draft",
+            "s2l_edit_blueprint", "s2l_image_brief", "s2l_list_platforms",
+            "s2l_produce", "s2l_research",
         ])
 
     def test_main_without_mcp_exits_nonzero(self):

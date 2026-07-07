@@ -44,6 +44,7 @@ from .pipeline import (
     preview_blueprint,
     run_pipeline,
 )
+from .image import build_image_prompt, image_brief
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -238,6 +239,74 @@ def _impl_draft(target: str, platforms: list[str] | None = None,
 
 
 # ---------------------------------------------------------------------------
+# Image prompt tools (text-only — no file system, no image API calls)
+# ---------------------------------------------------------------------------
+
+def _brief_options(title: str, subtitle: str, cta: str, badges: str) -> dict[str, Any]:
+    """Collect non-empty ad-copy fields into an image_brief options dict."""
+    options: dict[str, Any] = {}
+    if title:
+        options["title"] = title
+    if subtitle:
+        options["subtitle"] = subtitle
+    if cta:
+        options["cta"] = cta
+    if badges:
+        options["badges"] = badges
+    return options
+
+
+def _impl_image_brief(source_id: str, title: str = "", subtitle: str = "",
+                      cta: str = "", badges: str = "") -> dict[str, Any]:
+    """Resolve the ad-copy brief (title/subtitle/cta/badges) for image overlay."""
+    state = _load_state(source_id)
+    result = _require_result(state)
+    if result is None:
+        return _err("No analysis result for this source_id. Run s2l_analyze first.",
+                    source_id=source_id)
+    try:
+        # env={} isolates from the host environment so behavior is deterministic.
+        brief = image_brief(result, options=_brief_options(title, subtitle, cta, badges), env={})
+    except Exception as exc:  # noqa: BLE001
+        return _err(f"image_brief failed: {exc}", source_id=source_id)
+    return _ok(source_id=source_id, brief=brief)
+
+
+def _impl_build_image_prompt(source_id: str, platform: str = "xhs",
+                             skill: str = "auto", model: str = "",
+                             title: str = "", subtitle: str = "",
+                             cta: str = "", badges: str = "") -> dict[str, Any]:
+    """Build a text image-generation prompt for the given platform.
+
+    Returns the prompt string plus the resolved brief. The prompt can be fed to
+    any external image model (DALL·E, Qwen-Image, etc.) — PromoAgent does not
+    call the image API itself here. Pass ``model`` matching the target image
+    model so the prompt uses the right language (Chinese for Qwen, English for
+    DALL·E).
+    """
+    state = _load_state(source_id)
+    result = _require_result(state)
+    if result is None:
+        return _err("No analysis result for this source_id. Run s2l_analyze first.",
+                    source_id=source_id)
+    options = _brief_options(title, subtitle, cta, badges)
+    try:
+        brief = image_brief(result, options=options, env={}) if options else None
+        prompt = build_image_prompt(
+            result, platform=platform, skill=skill or None,
+            brief=brief, model=model,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(f"build_image_prompt failed: {exc}", source_id=source_id)
+    return _ok(
+        source_id=source_id,
+        platform=platform,
+        prompt=prompt,
+        brief=brief or {},
+    )
+
+
+# ---------------------------------------------------------------------------
 # FastMCP registration
 # ---------------------------------------------------------------------------
 
@@ -293,6 +362,27 @@ def _register(mcp: "FastMCP") -> None:
         return _impl_draft(target, platforms=platforms, search=search,
                            model=model, base_url=base_url, api_key=api_key)
 
+    @mcp.tool()
+    def s2l_image_brief(source_id: str, title: str = "", subtitle: str = "",
+                        cta: str = "", badges: str = "") -> dict:
+        """Resolve the ad-copy brief (title/subtitle/cta/badges) used for image
+        text overlay. Requires the ``source_id`` from s2l_analyze."""
+        return _impl_image_brief(source_id, title=title, subtitle=subtitle,
+                                 cta=cta, badges=badges)
+
+    @mcp.tool()
+    def s2l_build_image_prompt(source_id: str, platform: str = "xhs",
+                               skill: str = "auto", model: str = "",
+                               title: str = "", subtitle: str = "",
+                               cta: str = "", badges: str = "") -> dict:
+        """Build a text image-generation prompt for a platform. The prompt can be
+        fed to any external image model (DALL·E, Qwen-Image). Pass ``model``
+        matching the target image model so the prompt uses the right language.
+        ``skill`` defaults to "auto" (picked from recommendation kind)."""
+        return _impl_build_image_prompt(source_id, platform=platform, skill=skill,
+                                        model=model, title=title, subtitle=subtitle,
+                                        cta=cta, badges=badges)
+
 
 def create_server() -> "FastMCP":
     """Build and return the FastMCP server instance (for testing)."""
@@ -309,9 +399,11 @@ def main() -> None:
         print("promoagent-mcp: missing 'mcp' dependency. "
               "Install with: pip install 'promoagent[mcp]'", file=sys.stderr)
         sys.exit(1)
-    # MCP stdio uses stdout for JSON-RPC; keep logger noise on stderr quiet.
-    import os
-    os.environ.setdefault("PROMOAGENT_LOG_LEVEL", "WARNING")
+    # MCP stdio uses stdout for JSON-RPC; suppress INFO log noise on stderr so
+    # AI tools don't surface it as errors. set_level mutates the global logger
+    # instance, so pipeline modules holding an imported reference also quiet down.
+    from .logger import LogLevel, logger
+    logger.set_level(LogLevel.WARNING)
     mcp = create_server()
     mcp.run()
 

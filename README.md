@@ -242,6 +242,8 @@ Then ask naturally:
 | `s2l_edit_blueprint(source_id, edits)` | Apply edits (content updates, variant selection, reorder, add/remove element, set structure). Returns a markdown preview. |
 | `s2l_produce(source_id, platforms?)` | Generate platform-native content from the blueprint. |
 | `s2l_draft(target, platforms?, search=True)` | One-shot full pipeline (research → blueprint → produce). |
+| `s2l_image_brief(source_id, ...)` | Resolve the ad-copy brief (title/subtitle/cta/badges) for image text overlay. |
+| `s2l_build_image_prompt(source_id, platform, skill, model, ...)` | Build a text image-generation prompt for any external image model (DALL·E / Qwen-Image). Pass `model` to pick the prompt language. |
 
 ### Two Ways to Use It
 

@@ -50,6 +50,16 @@ class Logger:
     def _should_log(self, level: LogLevel) -> bool:
         return level >= self.level
 
+    def set_level(self, level: LogLevel) -> None:
+        """Change the minimum log level at runtime.
+
+        Mutates the instance in place so every module that imported the global
+        ``logger`` singleton picks up the new level immediately — unlike
+        ``configure()``, which rebinds the module attribute and leaves stale
+        references in callers that did ``from .logger import logger``.
+        """
+        self.level = level
+
     def _format_text(self, level: LogLevel, message: str, **kwargs: Any) -> str:
         """Format log entry as human-readable text."""
         level_names = {
