@@ -218,9 +218,12 @@ def _impl_produce(source_id: str, platforms: list[str] | None = None,
                     source_id=source_id)
     options = _build_options(model, base_url, api_key)
     options["quality_mode"] = quality
+    # result is needed so polished-mode backflow can re-run research when the
+    # critic flags fact insufficiency. It was cached by s2l_analyze/research.
+    result = state.get("result")
     try:
         out = stage_produce(blueprint, research, state, options,
-                            platforms=platforms, parallel=True)
+                            platforms=platforms, parallel=True, result=result)
     except Exception as exc:  # noqa: BLE001
         return _err(f"produce failed: {exc}", source_id=source_id)
     return _ok(

@@ -1201,6 +1201,114 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(call_count["n"], 4)
         self.assertEqual(out["data"]["xiaohongshu"]["_meta"]["backflow"]["stage"], "blueprint")
 
+    def test_backflow_parallel_multiplatform_no_crash(self):
+        """Parallel polished produce with backflow on multiple platforms must not
+        corrupt state. Exercises the RLock around PipelineState.set/get."""
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            user = m[-1]["content"] if m else ""
+            if "评审以下" in user or "待评内容" in user:
+                return json.dumps({
+                    "scores": {"fidelity": 4, "engagement": 4, "alignment": 2},
+                    "classified_issues": [{"type": "structure_issue", "description": "结构",
+                                           "suggested_edit": {"_selectVariant": {"hook": 0}}}],
+                    "primary_problem_type": "structure_issue",
+                    "issues": ["结构"], "improvements": ["调"],
+                }, ensure_ascii=False)
+            return json.dumps({"markdown": "内容"}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("backflow-parallel", cache_dir=Path(tmp))
+            state.set("research", research)
+            state.set("blueprint", blueprint)
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch), \
+                 patch.object(pipeline, "find_examples", lambda r, **kw: []):
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu", "twitter"], parallel=True,
+                                    result=result)
+        # Both platforms produced content; no crash, no corruption.
+        self.assertIn("xiaohongshu", out["data"])
+        self.assertIn("twitter", out["data"])
+        for plat in ("xiaohongshu", "twitter"):
+            self.assertNotIn("error", out["data"][plat])
+
+    def test_backflow_result_none_degrades_to_expression_weak(self):
+        """Without result, fact_insufficient can't rerun research → expression_weak."""
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            user = m[-1]["content"] if m else ""
+            if "评审以下" in user or "待评内容" in user:
+                return json.dumps({
+                    "scores": {"fidelity": 2, "engagement": 4, "alignment": 4},
+                    "classified_issues": [{"type": "fact_insufficient", "description": "缺数据"}],
+                    "primary_problem_type": "fact_insufficient",
+                    "issues": ["缺数据"], "improvements": ["补数据"],
+                }, ensure_ascii=False)
+            if "评审发现以下问题" in (m[-1]["content"] if m else ""):
+                return json.dumps({"markdown": "rewrite"}, ensure_ascii=False)
+            return json.dumps({"markdown": "内容"}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("backflow-noresult", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                # result=None → fact_insufficient degrades to expression_weak rewrite.
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False, result=None)
+        meta = out["data"]["xiaohongshu"]["_meta"]
+        # No research backflow (result missing); rewrote produce instead.
+        self.assertIsNone(meta["backflow"])
+        self.assertTrue(meta["rewritten"])
+
+    def test_critic_unusable_output_skips_rewrite(self):
+        """critic returns no scores and no classified_issues → skip rewrite, keep original."""
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            if call_count["n"] == 1:  # generate
+                return json.dumps({"markdown": "原始内容"}, ensure_ascii=False)
+            # critic: malformed — no scores, no classified_issues
+            return json.dumps({"issues": ["无法评分"], "improvements": []}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("critic-unusable", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False)
+        # Only generate + critic = 2 calls; no rewrite attempted.
+        self.assertEqual(call_count["n"], 2)
+        meta = out["data"]["xiaohongshu"]["_meta"]
+        self.assertEqual(meta.get("skipped"), "critic_output_unusable")
+        self.assertFalse(meta["rewritten"])
+
+    def test_sanitize_for_prompt_flattens_and_caps(self):
+        from promoagent.pipeline import _sanitize_for_prompt
+        # Newlines flattened.
+        self.assertNotIn("\n", _sanitize_for_prompt("line1\nline2"))
+        # Long text capped.
+        out = _sanitize_for_prompt("x" * 500)
+        self.assertLessEqual(len(out), 201)
+        self.assertTrue(out.endswith("…"))
+        # Short text passes through.
+        self.assertEqual(_sanitize_for_prompt("ok"), "ok")
+
     # ------------------------------------------------------------------
     # Pipeline: run_pipeline
     # ------------------------------------------------------------------

@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -60,6 +61,21 @@ def _build_facts_block(research_data: dict[str, Any]) -> str:
         parts.append("使用场景：" + "、".join(facts["use_cases"][:3]))
     return "\n\n".join(parts) if parts else ""
 
+
+# Cap and flatten text sourced from LLM output before injecting it back into a
+# prompt (e.g. critic descriptions written into research clarifications). This
+# limits prompt-injection blast radius — a malicious description can't smuggle
+# long instructions or newlines into the research prompt.
+_SANITIZED_TEXT_LIMIT = 200
+
+
+def _sanitize_for_prompt(text: Any) -> str:
+    """Trim, flatten, and cap LLM-sourced text before prompt injection."""
+    flat = " ".join(str(text or "").split())
+    if len(flat) > _SANITIZED_TEXT_LIMIT:
+        flat = flat[:_SANITIZED_TEXT_LIMIT] + "…"
+    return flat
+
 # ---------------------------------------------------------------------------
 # Pipeline State Management
 # ---------------------------------------------------------------------------
@@ -77,6 +93,12 @@ class PipelineState:
             "updated": time.time(),
             "version": "2.0",
         }
+        # Guards the in-memory stages dict. Parallel produce workers can trigger
+        # cross-stage backflow (which re-runs research/blueprint and calls
+        # state.set) concurrently — without this lock, concurrent dict mutation
+        # corrupts state. The atomic file write (os.replace) handles disk; this
+        # handles the shared Python object.
+        self._lock = threading.RLock()
         self._load()
 
     def _load(self) -> None:
@@ -109,14 +131,17 @@ class PipelineState:
         os.replace(tmp, self.state_file)
 
     def get(self, stage: str) -> dict[str, Any] | None:
-        return self.stages.get(stage)
+        with self._lock:
+            return self.stages.get(stage)
 
     def set(self, stage: str, data: dict[str, Any]) -> None:
-        self.stages[stage] = data
-        self.save()
+        with self._lock:
+            self.stages[stage] = data
+            self.save()
 
     def has(self, stage: str) -> bool:
-        return stage in self.stages
+        with self._lock:
+            return stage in self.stages
 
     def is_stale(self, stage: str, upstream: str) -> bool:
         """Return True if ``stage``'s cached ``_upstream`` snapshot is older than
@@ -127,19 +152,20 @@ class PipelineState:
         without the ``_upstream`` field), so the first run self-heals without
         forcing a recompute.
         """
-        cached = self.stages.get(stage)
-        if not isinstance(cached, dict):
-            return False
-        recorded = (cached.get("_upstream") or {}).get(upstream)
-        if recorded is None:
-            return False  # old cache without upstream tracking — tolerate it
-        upstream_out = self.stages.get(upstream)
-        if not isinstance(upstream_out, dict):
-            return False
-        actual = upstream_out.get("timestamp")
-        if actual is None:
-            return False
-        return recorded != actual
+        with self._lock:
+            cached = self.stages.get(stage)
+            if not isinstance(cached, dict):
+                return False
+            recorded = (cached.get("_upstream") or {}).get(upstream)
+            if recorded is None:
+                return False  # old cache without upstream tracking — tolerate it
+            upstream_out = self.stages.get(upstream)
+            if not isinstance(upstream_out, dict):
+                return False
+            actual = upstream_out.get("timestamp")
+            if actual is None:
+                return False
+            return recorded != actual
 
     def clear(self) -> None:
         self.stages = {}
@@ -833,6 +859,17 @@ def _review_and_rewrite(
         content["_meta"] = meta
         return content
 
+    # If the critic returned no usable scores AND no structured issues, the
+    # output was malformed — rewriting off a zero score can't improve anything
+    # and just wastes a call. Keep the original and record the skip.
+    scores = critique.get("scores") or {}
+    has_scores = any(int(scores.get(k, 0) or 0) > 0 for k in ("fidelity", "engagement", "alignment"))
+    has_classified = bool(critique.get("classified_issues"))
+    if not has_scores and not has_classified:
+        meta["skipped"] = "critic_output_unusable"
+        content["_meta"] = meta
+        return content
+
     problem_type = critique.get("primary_problem_type", "expression_weak")
     pre_score = critique.get("total", 0)
 
@@ -906,8 +943,11 @@ def _backflow_research(
     state (avoids clobbering concurrent platform workers' shared state).
     """
     # 1. Write fact-gap hints into clarifications (merged, not overwriting user answers).
+    # Sanitize each description before injection — it's LLM-sourced text going
+    # back into the research prompt, so cap length and strip newlines.
     fact_gaps = [
-        i.get("description", "") for i in (critique.get("classified_issues") or [])
+        _sanitize_for_prompt(i.get("description", ""))
+        for i in (critique.get("classified_issues") or [])
         if isinstance(i, dict) and i.get("type") == "fact_insufficient" and i.get("description")
     ]
     clar = dict(state.get("clarifications") or {})

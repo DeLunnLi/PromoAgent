@@ -281,7 +281,10 @@ def _run_draft(args: argparse.Namespace) -> int:
             print_error("Cannot resume: research stage is missing from saved state. Re-run `promoagent draft` from the start.")
             return 1
         platforms = args.platforms.split(",") if args.platforms else None
-        produce = stage_produce(blueprint, research, state, options, platforms=platforms, parallel=args.parallel)
+        # result enables polished-mode backflow to re-run research on fact gaps.
+        result = state.get("result")
+        produce = stage_produce(blueprint, research, state, options,
+                                platforms=platforms, parallel=args.parallel, result=result)
 
         # Generate assets
         assets = generate_assets(blueprint, produce, platforms=platforms, options=options)

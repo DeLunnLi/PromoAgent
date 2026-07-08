@@ -205,6 +205,25 @@ class TestMcpServer(_StateIsolationMixin, unittest.TestCase):
             _impl_produce(sid, quality="polished")
         self.assertEqual(captured["quality_mode"], "polished")
 
+    def test_s2l_produce_passes_result_for_backflow(self):
+        """s2l_produce threads `result` from state so polished backflow can rerun research."""
+        captured = {}
+
+        def fake_stage_produce(blueprint, research, state, options=None, **kw):
+            captured["result"] = kw.get("result")
+            return {"data": {}, "platforms": []}
+
+        with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp), \
+                patch.object(pipeline, "dispatch_chat", _fake_dispatch_factory()), \
+                patch.object(pipeline, "find_examples", lambda r, **kw: []), \
+                patch.object(mcp_server, "stage_produce", fake_stage_produce):
+            sid = _impl_research(str(FIXTURES / "healthy-repo"), search=False)["source_id"]
+            _impl_blueprint(sid)
+            _impl_produce(sid, quality="polished")
+        # result was cached by s2l_research → s2l_produce must forward it.
+        self.assertIsNotNone(captured["result"])
+        self.assertEqual(captured["result"].get("project", {}).get("name"), "repo-pulse")
+
     def test_s2l_draft_passes_quality_mode(self):
         captured = {}
 
