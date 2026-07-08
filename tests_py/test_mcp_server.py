@@ -188,6 +188,36 @@ class TestMcpServer(_StateIsolationMixin, unittest.TestCase):
         self.assertIn("xiaohongshu", out["produce"])
         self.assertEqual(out["produce"]["xiaohongshu"]["markdown"], "平台内容")
 
+    def test_s2l_produce_passes_quality_mode(self):
+        """The quality argument is threaded into options['quality_mode']."""
+        captured = {}
+
+        def fake_stage_produce(blueprint, research, state, options=None, **kw):
+            captured["quality_mode"] = (options or {}).get("quality_mode")
+            return {"data": {}, "platforms": []}
+
+        with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp), \
+                patch.object(pipeline, "dispatch_chat", _fake_dispatch_factory()), \
+                patch.object(pipeline, "find_examples", lambda r, **kw: []), \
+                patch.object(mcp_server, "stage_produce", fake_stage_produce):
+            sid = _impl_research(str(FIXTURES / "healthy-repo"), search=False)["source_id"]
+            _impl_blueprint(sid)
+            _impl_produce(sid, quality="polished")
+        self.assertEqual(captured["quality_mode"], "polished")
+
+    def test_s2l_draft_passes_quality_mode(self):
+        captured = {}
+
+        def fake_run_pipeline(result, options=None, **kw):
+            captured["quality_mode"] = (options or {}).get("quality_mode")
+            return {"research": {"data": {}}, "produce": {"data": {}}}
+
+        with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp), \
+                patch.object(pipeline, "find_examples", lambda r, **kw: []), \
+                patch.object(mcp_server, "run_pipeline", fake_run_pipeline):
+            _impl_draft(str(FIXTURES / "healthy-repo"), search=False, quality="balanced")
+        self.assertEqual(captured["quality_mode"], "balanced")
+
     def test_s2l_produce_missing_blueprint_errors(self):
         with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp):
             out = _impl_produce("nonexistent-source-id")

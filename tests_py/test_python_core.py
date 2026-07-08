@@ -753,6 +753,135 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     # ------------------------------------------------------------------
+    # Pipeline: quality modes (facts / playbook / few-shot / critic)
+    # ------------------------------------------------------------------
+
+    def _produce_capture(self, research_data, quality_mode, references=None):
+        """Run produce with a dispatch mock that captures the prompt; return (calls, captured_prompt, captured_system)."""
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"label": "Hook", "content": "Hello"}]}}
+        calls = []
+        captured = {"user": "", "system": ""}
+
+        def fake_dispatch(m, c):
+            calls.append(m)
+            captured["system"] = m[0]["content"]
+            captured["user"] = m[-1]["content"]
+            return json.dumps({"markdown": "内容", "hashtags": []}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState(f"produce-{quality_mode}", cache_dir=Path(tmp))
+            if references is not None:
+                state.set("references", {"examples": references, "searched": True, "source": "search", "timestamp": 0})
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                stage_produce(blueprint, {"data": research_data}, state,
+                              options={"api_key": "k", "quality_mode": quality_mode},
+                              platforms=["xiaohongshu"], parallel=False)
+        return calls, captured
+
+    def test_produce_injects_facts(self):
+        research_data = {"facts": {"core_claim": "测试主张", "key_facts": ["事实A", "事实B"]}}
+        calls, captured = self._produce_capture(research_data, "fast")
+        self.assertIn("事实A", captured["user"])
+        self.assertIn("关键事实", captured["user"])
+
+    def test_balanced_injects_playbook(self):
+        research_data = {"facts": {"key_facts": ["x"]}}
+        _, captured = self._produce_capture(research_data, "balanced")
+        self.assertIn("平台法则", captured["system"])
+        self.assertIn("前3行", captured["system"])  # xiaohongshu opening_rule
+
+    def test_fast_omits_playbook(self):
+        research_data = {"facts": {}}
+        _, captured = self._produce_capture(research_data, "fast")
+        self.assertNotIn("平台法则", captured["system"])
+
+    def test_produce_injects_references(self):
+        research_data = {"facts": {}}
+        _, captured = self._produce_capture(research_data, "balanced", references=["【案例】\n参考广告正文"])
+        self.assertIn("参考广告正文", captured["user"])
+        self.assertIn("参考广告/示例", captured["user"])
+
+    def test_produce_empty_references_no_crash(self):
+        research_data = {"facts": {}}
+        _, captured = self._produce_capture(research_data, "balanced", references=[])
+        self.assertNotIn("参考广告/示例", captured["user"])
+
+    def test_fast_mode_one_call_per_platform(self):
+        research_data = {"facts": {"key_facts": ["x"]}}
+        calls, _ = self._produce_capture(research_data, "fast")
+        self.assertEqual(len(calls), 1, "fast mode must make exactly 1 call per platform")
+
+    def test_critic_low_score_triggers_rewrite(self):
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"label": "Hook", "content": "Hello"}]}}
+        research = {"data": {"facts": {"key_facts": ["事实1"]}}}
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            if call_count["n"] == 1:  # generate
+                return json.dumps({"markdown": "空话连篇"}, ensure_ascii=False)
+            if call_count["n"] == 2:  # critic
+                return json.dumps({"scores": {"fidelity": 2, "engagement": 2, "alignment": 3},
+                                   "issues": ["无事实"], "improvements": ["补事实"]}, ensure_ascii=False)
+            return json.dumps({"markdown": "修正后含事实"}, ensure_ascii=False)  # rewrite
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("produce-critic-low", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False)
+        self.assertEqual(call_count["n"], 3, "polished+low score → generate+critic+rewrite")
+        content = out["data"]["xiaohongshu"]
+        self.assertTrue(content["_meta"]["rewritten"])
+        self.assertEqual(content["_meta"]["critique"]["total"], 7)
+
+    def test_critic_high_score_skips_rewrite(self):
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"label": "Hook", "content": "Hello"}]}}
+        research = {"data": {"facts": {"key_facts": ["事实1"]}}}
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            if call_count["n"] == 1:  # generate
+                return json.dumps({"markdown": "高质量内容"}, ensure_ascii=False)
+            return json.dumps({"scores": {"fidelity": 5, "engagement": 5, "alignment": 5},
+                               "issues": [], "improvements": []}, ensure_ascii=False)  # critic
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("produce-critic-high", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False)
+        self.assertEqual(call_count["n"], 2, "high score → generate+critic only")
+        self.assertFalse(out["data"]["xiaohongshu"]["_meta"]["rewritten"])
+
+    def test_quality_mode_change_bypasses_cache(self):
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"label": "Hook", "content": "Hello"}]}}
+        research = {"data": {"facts": {}}}
+        calls = []
+
+        def fake_dispatch(m, c):
+            calls.append(m)
+            return json.dumps({"markdown": "x"}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("produce-modechange", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                stage_produce(blueprint, research, state,
+                              options={"api_key": "k", "quality_mode": "balanced"},
+                              platforms=["twitter"], parallel=False)
+                stage_produce(blueprint, research, state,
+                              options={"api_key": "k", "quality_mode": "fast"},
+                              platforms=["twitter"], parallel=False)
+        self.assertEqual(len(calls), 2, "mode change must bypass cache")
+
+    # ------------------------------------------------------------------
     # Pipeline: run_pipeline
     # ------------------------------------------------------------------
 

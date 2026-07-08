@@ -63,6 +63,8 @@ def _build_parser() -> argparse.ArgumentParser:
     draft.add_argument("--platforms", help="Comma-separated list of target platforms.")
     draft.add_argument("--image", action="store_true", help="Generate cover images.")
     draft.add_argument("--no-search", action="store_true", help="Skip reference ad search during research.")
+    draft.add_argument("--quality", choices=["fast", "balanced", "polished"], default="balanced",
+                       help="质量模式：fast(仅事实)/balanced(+平台知识+few-shot)/polished(+critic重写)。")
     draft.add_argument("--output-dir", default="launch-assets", help="Output directory for files.")
     draft.add_argument("--json", action="store_true", help="Output as JSON.")
     draft.add_argument("-o", "--output", help="Output file.")
@@ -246,6 +248,7 @@ def _run_draft(args: argparse.Namespace) -> int:
     )
 
     options = {k: getattr(args, k) for k in ["model", "base_url", "max_tokens", "temperature"] if getattr(args, k)}
+    options["quality_mode"] = args.quality
 
     with progress_spinner("Analyzing source"):
         result = analyze_target(args.target)

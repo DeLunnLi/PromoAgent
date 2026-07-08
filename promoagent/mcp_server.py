@@ -208,7 +208,8 @@ def _impl_edit_blueprint(source_id: str, edits: dict[str, Any]) -> dict[str, Any
 
 
 def _impl_produce(source_id: str, platforms: list[str] | None = None,
-                  model: str = "", base_url: str = "", api_key: str = "") -> dict[str, Any]:
+                  model: str = "", base_url: str = "", api_key: str = "",
+                  quality: str = "fast") -> dict[str, Any]:
     state = _load_state(source_id)
     blueprint = state.get("blueprint")
     research = state.get("research")
@@ -216,6 +217,7 @@ def _impl_produce(source_id: str, platforms: list[str] | None = None,
         return _err("Missing blueprint or research. Run s2l_research then s2l_blueprint first.",
                     source_id=source_id)
     options = _build_options(model, base_url, api_key)
+    options["quality_mode"] = quality
     try:
         out = stage_produce(blueprint, research, state, options,
                             platforms=platforms, parallel=True)
@@ -230,13 +232,14 @@ def _impl_produce(source_id: str, platforms: list[str] | None = None,
 
 def _impl_draft(target: str, platforms: list[str] | None = None,
                 search: bool = True, model: str = "", base_url: str = "",
-                api_key: str = "") -> dict[str, Any]:
+                api_key: str = "", quality: str = "fast") -> dict[str, Any]:
     try:
         result = analyze_target(target)
     except Exception as exc:  # noqa: BLE001
         return _err(f"analyze failed: {exc}")
     source_id, state = _store_result(result)
     options = _build_options(model, base_url, api_key)
+    options["quality_mode"] = quality
     try:
         outputs = run_pipeline(result, options, state=state, search=search)
     except Exception as exc:  # noqa: BLE001
@@ -359,20 +362,25 @@ def _register(mcp: "FastMCP") -> None:
 
     @mcp.tool()
     def s2l_produce(source_id: str, platforms: list[str] | None = None,
-                    model: str = "", base_url: str = "", api_key: str = "") -> dict:
+                    model: str = "", base_url: str = "", api_key: str = "",
+                    quality: str = "fast") -> dict:
         """Generate platform-native content (markdown, hashtags, threads) from a
-        blueprint. Optionally restrict to a subset of platforms."""
+        blueprint. ``quality`` controls enrichment: fast (facts only, 1 call),
+        balanced (+playbook+few-shot), polished (+critic rewrite, 2-3 calls)."""
         return _impl_produce(source_id, platforms=platforms, model=model,
-                             base_url=base_url, api_key=api_key)
+                             base_url=base_url, api_key=api_key, quality=quality)
 
     @mcp.tool()
     def s2l_draft(target: str, platforms: list[str] | None = None,
                   search: bool = True, model: str = "",
-                  base_url: str = "", api_key: str = "") -> dict:
+                  base_url: str = "", api_key: str = "",
+                  quality: str = "fast") -> dict:
         """One-shot full pipeline (research → blueprint → produce). Returns
-        platform content directly. Use the staged tools for interactive editing."""
+        platform content directly. ``quality``: fast/balanced/polished (see
+        s2l_produce). Use the staged tools for interactive editing."""
         return _impl_draft(target, platforms=platforms, search=search,
-                           model=model, base_url=base_url, api_key=api_key)
+                           model=model, base_url=base_url, api_key=api_key,
+                           quality=quality)
 
     @mcp.tool()
     def s2l_image_brief(source_id: str, title: str = "", subtitle: str = "",

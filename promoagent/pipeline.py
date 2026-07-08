@@ -24,7 +24,41 @@ from typing import Any
 from .ai import ai_config, dispatch_chat, parse_json_content
 from .examples import find_examples, format_examples_for_prompt
 from .logger import logger
-from .platforms import get_platform, to_prompt_dict, get_primary_platforms
+from .platforms import get_platform, to_prompt_dict, get_primary_platforms, format_playbook_for_prompt
+
+# ---------------------------------------------------------------------------
+# Quality modes — control how much enrichment each produce call gets.
+# ---------------------------------------------------------------------------
+
+QUALITY_FAST = "fast"
+QUALITY_BALANCED = "balanced"
+QUALITY_POLISHED = "polished"
+QUALITY_MODES = (QUALITY_FAST, QUALITY_BALANCED, QUALITY_POLISHED)
+
+
+def _resolve_quality_mode(options: dict[str, Any] | None) -> str:
+    mode = (options or {}).get("quality_mode", QUALITY_BALANCED)
+    return mode if mode in QUALITY_MODES else QUALITY_BALANCED
+
+
+def _build_facts_block(research_data: dict[str, Any]) -> str:
+    """Render research facts into a prompt block. Empty string if no facts."""
+    facts = research_data.get("facts", {}) or {}
+    parts: list[str] = []
+    if facts.get("core_claim"):
+        parts.append(f"核心主张：{facts['core_claim']}")
+    if facts.get("key_facts"):
+        parts.append("关键事实：\n" + "\n".join(f"- {f}" for f in facts["key_facts"][:5]))
+    if facts.get("target_users"):
+        tu = [f"- {u.get('segment', '')}：痛点「{u.get('pain', '')}」/ 欲望「{u.get('desire', '')}」"
+              for u in facts["target_users"][:3] if isinstance(u, dict)]
+        if tu:
+            parts.append("目标用户：\n" + "\n".join(tu))
+    if facts.get("unique_angles"):
+        parts.append("独特角度：" + "、".join(facts["unique_angles"][:3]))
+    if facts.get("use_cases"):
+        parts.append("使用场景：" + "、".join(facts["use_cases"][:3]))
+    return "\n\n".join(parts) if parts else ""
 
 # ---------------------------------------------------------------------------
 # Pipeline State Management
@@ -609,8 +643,16 @@ def _generate_single_platform(
     blueprint_data: dict[str, Any],
     research_data: dict[str, Any],
     options: dict[str, Any],
+    quality_mode: str = QUALITY_BALANCED,
+    references: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Generate content for a single platform."""
+    """Generate content for a single platform.
+
+    ``quality_mode`` controls enrichment:
+    - fast: facts only (1 LLM call)
+    - balanced: facts + platform playbook + few-shot references (1 call)
+    - polished: balanced + critic review + conditional rewrite (2-3 calls)
+    """
     config = ai_config(options)
 
     # Get platform spec from centralized config
@@ -626,13 +668,28 @@ def _generate_single_platform(
         for e in blueprint_data.get("elements", [])
     ])
 
+    # --- Enrichment blocks (all modes get facts; balanced+ get more) ---
+    facts_block = _build_facts_block(research_data)
+
+    playbook_block = ""
+    if quality_mode in (QUALITY_BALANCED, QUALITY_POLISHED):
+        playbook_block = format_playbook_for_prompt(platform)
+
+    examples_block = ""
+    if quality_mode in (QUALITY_BALANCED, QUALITY_POLISHED) and references:
+        examples_block = format_examples_for_prompt(references)
+
+    system_extra = f"\n\n{playbook_block}" if playbook_block else ""
     system_prompt = f"""你是{platform}内容专家。将 Blueprint 转换为该平台原生格式。
 平台特点：{spec['style']}，{spec['tone']}
-输出严格 JSON。"""
+{system_extra}
+输出严格 JSON。""".strip()
 
+    facts_section = f"\n\n{facts_block}\n" if facts_block else ""
+    examples_section = f"\n\n{examples_block}\n" if examples_block else ""
     user_prompt = f"""将以下内容转换为{platform}格式：
 
-定位：{blueprint_data.get('positioning', {}).get('one_liner', '')}
+定位：{blueprint_data.get('positioning', {}).get('one_liner', '')}{facts_section}{examples_section}
 
 内容元素：
 {elements_text}
@@ -651,7 +708,8 @@ def _generate_single_platform(
 
 要求：
 - 严格遵循平台风格和字数限制
-- 基于 Blueprint 元素，不要添加未提及的信息
+- 基于 Blueprint 元素和研究事实，不要添加未提及的信息
+- markdown 正文必须包含「关键事实」中至少 2 条可核验信息，不要泛泛而谈
 - hashtags 要符合平台习惯"""
 
     messages = [
@@ -662,10 +720,123 @@ def _generate_single_platform(
     try:
         response = dispatch_chat(messages, config)
         parsed = parse_json_content(response)
-        return platform, parsed
     except Exception as e:
         logger.error(f"platform generation failed", platform=platform, error=str(e))
         return platform, {"error": str(e)}
+
+    # --- Polished: critic review + conditional rewrite ---
+    if quality_mode == QUALITY_POLISHED and "error" not in parsed:
+        parsed = _review_and_rewrite(platform, parsed, research_data, spec, messages, response, options)
+
+    return platform, parsed
+
+
+def _review_and_rewrite(
+    platform: str,
+    content: dict[str, Any],
+    research_data: dict[str, Any],
+    spec: dict[str, Any],
+    original_messages: list[dict[str, str]],
+    original_response: str,
+    options: dict[str, Any],
+) -> dict[str, Any]:
+    """Run a critic pass; rewrite once if scores are low. Mutates content with _meta."""
+    critique = _critic_platform(platform, content, research_data, spec, options)
+    meta = {"quality_mode": QUALITY_POLISHED, "critique": critique, "rewritten": False}
+    if critique.get("should_rewrite"):
+        rewritten = _rewrite_platform(original_messages, original_response, critique, options)
+        if rewritten and "error" not in rewritten:
+            content = rewritten
+            meta["rewritten"] = True
+    content["_meta"] = meta
+    return content
+
+
+def _critic_platform(
+    platform: str,
+    content: dict[str, Any],
+    research_data: dict[str, Any],
+    spec: dict[str, Any],
+    options: dict[str, Any],
+) -> dict[str, Any]:
+    """Score content on fidelity/engagement/alignment (1-5 each)."""
+    config = ai_config(options)
+    facts_block = _build_facts_block(research_data)
+
+    system_prompt = f"你是{platform}内容质量评审。对生成内容按三轴打分（1-5）并给出具体问题。输出严格 JSON。"
+    user_prompt = f"""评审以下{platform}内容：
+
+{f'【研究事实】\n{facts_block}' if facts_block else '【研究事实】（无）'}
+
+【平台规格】
+{json.dumps(spec, ensure_ascii=False)}
+
+【待评内容】
+标题：{content.get('title', '')}
+正文：{content.get('markdown', '')}
+标签：{content.get('hashtags', [])}
+
+请按以下 JSON 格式输出评分：
+{{
+  "scores": {{
+    "fidelity": 1-5,
+    "engagement": 1-5,
+    "alignment": 1-5
+  }},
+  "issues": ["具体问题1：哪里偏离了事实/开头不够抓人/不像平台原生", "..."],
+  "improvements": ["对应改进建议1", "..."]
+}}
+
+三轴定义：
+- fidelity（事实保真）：内容是否可核验、是否包含研究关键事实、有无编造
+- engagement（吸引力）：开头3秒是否抓人、是否有具体场景/数字、是否避免模板腔
+- alignment（平台原生感）：是否符合平台风格/结构/长度、是否像广告感而非真实分享"""
+
+    try:
+        response = dispatch_chat(
+            [{"role": "system", "content": system_prompt},
+             {"role": "user", "content": user_prompt}],
+            config,
+        )
+        critique = parse_json_content(response)
+    except Exception as exc:  # noqa: BLE001 — critic failure must not break generation
+        logger.warning("critic failed", platform=platform, error=str(exc))
+        return {"scores": {}, "issues": [], "improvements": [], "total": 0,
+                "should_rewrite": False, "error": str(exc)}
+
+    scores = critique.get("scores", {}) or {}
+    total = sum(int(scores.get(k, 0) or 0) for k in ("fidelity", "engagement", "alignment"))
+    critique["total"] = total
+    critique["should_rewrite"] = any(int(scores.get(k, 0) or 0) < 3 for k in ("fidelity", "engagement", "alignment")) or total < 10
+    return critique
+
+
+def _rewrite_platform(
+    original_messages: list[dict[str, str]],
+    original_response: str,
+    critique: dict[str, Any],
+    options: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Rewrite content based on critic feedback. At most one rewrite pass."""
+    config = ai_config(options)
+    issues = critique.get("issues", [])[:4]
+    improvements = critique.get("improvements", [])[:4]
+    feedback = (
+        "评审发现以下问题，请修正后重新输出完整 JSON：\n\n"
+        f"问题：\n- " + "\n- ".join(issues) +
+        f"\n\n改进建议：\n- " + "\n- ".join(improvements) +
+        "\n\n请输出修正后的完整 JSON，保持原格式。"
+    )
+    messages = original_messages + [
+        {"role": "assistant", "content": original_response},
+        {"role": "user", "content": feedback},
+    ]
+    try:
+        response = dispatch_chat(messages, config)
+        return parse_json_content(response)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("rewrite failed", error=str(exc))
+        return None
 
 
 def stage_produce(
@@ -676,14 +847,23 @@ def stage_produce(
     force: bool = False,
     platforms: list[str] | None = None,
     parallel: bool = True,
+    quality_mode: str | None = None,
 ) -> dict[str, Any]:
     """Produce stage: Generate platform-native content.
 
-    Supports parallel generation for multiple platforms.
+    Supports parallel generation for multiple platforms. ``quality_mode``
+    (fast/balanced/polished) controls enrichment; a mode change bypasses cache.
     """
+    quality_mode = quality_mode or _resolve_quality_mode(options)
+
+    # Cache: hit only when the stored quality_mode matches the requested one.
     if not force and state.has("produce"):
-        logger.info("using cached produce stage")
-        return state.get("produce")
+        cached = state.get("produce")
+        cached_mode = (cached.get("_meta") or {}).get("quality_mode", QUALITY_FAST)
+        if cached_mode == quality_mode:
+            logger.info("using cached produce stage")
+            return cached
+        logger.info("quality_mode changed, regenerating produce", cached=cached_mode, requested=quality_mode)
 
     research_data = research.get("data", {})
     blueprint_data = blueprint.get("data", {})
@@ -691,7 +871,10 @@ def stage_produce(
     # Determine platforms to generate
     target_platforms = platforms or research_data.get("strategy", {}).get("recommended_platforms", ["xiaohongshu", "twitter"])
 
-    logger.info("running produce stage", platforms=target_platforms, parallel=parallel)
+    # Reference ads for balanced/polished few-shot injection.
+    references = (state.get("references") or {}).get("examples") or []
+
+    logger.info("running produce stage", platforms=target_platforms, parallel=parallel, quality_mode=quality_mode)
 
     results = {}
 
@@ -705,6 +888,8 @@ def stage_produce(
                     blueprint_data,
                     research_data,
                     options or {},
+                    quality_mode,
+                    references,
                 ): platform
                 for platform in target_platforms
             }
@@ -720,7 +905,10 @@ def stage_produce(
     else:
         # Sequential generation
         for platform in target_platforms:
-            _, content = _generate_single_platform(platform, blueprint_data, research_data, options or {})
+            _, content = _generate_single_platform(
+                platform, blueprint_data, research_data, options or {},
+                quality_mode, references,
+            )
             results[platform] = content
 
     output = {
@@ -728,6 +916,7 @@ def stage_produce(
         "data": results,
         "timestamp": time.time(),
         "platforms": list(results.keys()),
+        "_meta": {"quality_mode": quality_mode},
     }
 
     state.set("produce", output)

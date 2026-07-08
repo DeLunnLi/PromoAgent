@@ -120,6 +120,10 @@ promoagent draft . --interactive
 # Create complete launch package with images
 promoagent draft . --image --output-dir launch-assets/
 
+# Quality modes: fast (facts only) / balanced (default, +playbook+few-shot) / polished (+critic rewrite)
+promoagent draft . --quality fast            # quick draft, 1 LLM call/platform
+promoagent draft . --quality polished        # final publish quality, 2-3 calls/platform
+
 # Continue from saved blueprint
 promoagent draft --resume --stage produce
 ```

@@ -247,3 +247,72 @@ def to_prompt_dict(spec: PlatformSpec) -> dict[str, Any]:
         "emoji": spec.emoji,
         "tone": spec.tone,
     }
+
+
+# ---------------------------------------------------------------------------
+# Platform playbooks — deeper, prompt-injected knowledge per platform.
+#
+# Kept separate from PlatformSpec on purpose: asdict(spec) is serialized for the
+# MCP s2l_list_platforms tool, and embedding long playbook text there would
+# bloat every platform-list response. Playbooks are pulled on demand only by
+# the produce stage.
+# ---------------------------------------------------------------------------
+
+PLATFORM_PLAYBOOKS: dict[str, dict[str, str]] = {
+    "xiaohongshu": {
+        "structure_template": "痛点引入（前3行）→ 个人体验故事 → 具体好处（带数字/场景）→ 互动CTA",
+        "opening_rule": "前3行决定推荐流量。第一句要有具体场景或冲突，禁止以「推荐」「介绍」开头",
+        "good_vs_bad": "好帖：像朋友分享体验；广告感帖：罗列功能参数、通篇「我们」「这款」",
+        "mechanics": "话题标签3-5个放文末，含1个大词+2个长尾词；标题SEO关键词前置；正文口语化、分段短",
+    },
+    "twitter": {
+        "structure_template": "钩子推文（冲击力）→ 价值点1 → 价值点2 → 证据/数据 → CTA推文",
+        "opening_rule": "首推文决定整条串是否被展开。用反常识、具体数字或提问开头，禁止「我很兴奋地宣布」",
+        "good_vs_bad": "好推：一句一个信息点；广告感推：堆砌形容词、链接放首推",
+        "mechanics": "链接放最后一推；每推独立可读；hashtag最多2个；首推留字符余量给预览卡片",
+    },
+    "zhihu": {
+        "structure_template": "问题切入 → 个人观点（带立场）→ 论证（数据/案例/对比）→ 实操建议 → 总结",
+        "opening_rule": "首段要给明确结论或反常识观点，知乎读者吃这一套；禁止「关于这个问题我认为」",
+        "good_vs_bad": "好答：有信息密度和结构；水答：堆砌大段空话、无数据支撑",
+        "mechanics": "用加粗/小标题分段；关键数据加引用；文末可加相关推荐但不硬广",
+    },
+    "wechat": {
+        "structure_template": "场景代入 → 痛点共鸣 → 解决方案展开 → 案例/数据佐证 → 价值收尾",
+        "opening_rule": "首段要有一个具体的人/场景，公众号读者要被代入才往下读",
+        "good_vs_bad": "好文：叙事感强、有信息增量；水文：通篇口号、无具体案例",
+        "mechanics": "小标题分明；每段不超过4行；配图位置预留；文末引导关注但不强推",
+    },
+    "linkedin": {
+        "structure_template": "职业洞察开场 → 反共识/数据点 → 3-5条结构化要点 → 个人经验佐证 → 行动呼吁",
+        "opening_rule": "首行给一个能引发同行讨论的判断，LinkedIn 算法重讨论",
+        "good_vs_bad": "好帖：专业且有立场；广告帖：纯产品宣传、无个人视角",
+        "mechanics": "每行间空行提升可读性；3-5个要点用emoji编号；文末抛问题促评论",
+    },
+}
+
+
+def get_playbook(key: str) -> dict[str, str] | None:
+    """Return the playbook for a platform key, resolving aliases (xhs→xiaohongshu)."""
+    spec = PLATFORMS.get(key.lower().strip())
+    if spec is None:
+        return None
+    return PLATFORM_PLAYBOOKS.get(spec.key)
+
+
+def format_playbook_for_prompt(key: str) -> str:
+    """Format a platform playbook into a prompt block; empty string if none."""
+    pb = get_playbook(key)
+    if not pb:
+        return ""
+    lines = [f"【{key} 平台法则】"]
+    for label, field in [
+        ("结构模板", "structure_template"),
+        ("开头法则", "opening_rule"),
+        ("好/反例", "good_vs_bad"),
+        ("机制要点", "mechanics"),
+    ]:
+        if pb.get(field):
+            lines.append(f"{label}：{pb[field]}")
+    return "\n".join(lines)
+
