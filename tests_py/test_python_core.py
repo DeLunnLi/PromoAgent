@@ -1210,27 +1210,36 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(call_count["n"], 4)
         self.assertEqual(out["data"]["xiaohongshu"]["_meta"]["backflow"]["stage"], "blueprint")
 
-    def test_backflow_parallel_multiplatform_no_crash(self):
-        """Parallel polished produce with backflow on multiple platforms must not
-        corrupt state. Exercises the RLock around PipelineState.set/get."""
+    def test_backflow_parallel_multiplatform_correctness(self):
+        """Parallel polished produce with backflow on multiple platforms must
+        not corrupt state AND each platform must receive its own distinct
+        regenerated content — not a copy of the other platform's result.
+
+        Exercises the RLock around PipelineState.set/get and verifies the
+        backflow didn't cross-wire platforms (the last-writer-wins concern on
+        the shared research/blueprint state)."""
         blueprint = {"data": {"positioning": {"one_liner": "L"},
-                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H",
+                                            "variants": ["v1", "v2"]}]}}
         research = {"data": {"facts": {"key_facts": ["x"]}}}
         result = analyze_target("healthy-repo", cwd=FIXTURES)
-        call_count = {"n": 0}
 
         def fake_dispatch(m, c):
-            call_count["n"] += 1
             user = m[-1]["content"] if m else ""
             if "评审以下" in user or "待评内容" in user:
                 return json.dumps({
                     "scores": {"fidelity": 4, "engagement": 4, "alignment": 2},
                     "classified_issues": [{"type": "structure_issue", "description": "结构",
-                                           "suggested_edit": {"_selectVariant": {"hook": 0}}}],
+                                           "suggested_edit": {"_selectVariant": {"hook": 1}}}],
                     "primary_problem_type": "structure_issue",
                     "issues": ["结构"], "improvements": ["调"],
                 }, ensure_ascii=False)
-            return json.dumps({"markdown": "内容"}, ensure_ascii=False)
+            # Produce output is tagged with the platform name from the prompt,
+            # so we can tell each platform got its own regeneration.
+            for plat in ("xiaohongshu", "twitter"):
+                if plat in user:
+                    return json.dumps({"markdown": f"内容-{plat}"}, ensure_ascii=False)
+            return json.dumps({"markdown": "fallback"}, ensure_ascii=False)
 
         with tempfile.TemporaryDirectory() as tmp:
             state = PipelineState("backflow-parallel", cache_dir=Path(tmp))
@@ -1246,7 +1255,14 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("xiaohongshu", out["data"])
         self.assertIn("twitter", out["data"])
         for plat in ("xiaohongshu", "twitter"):
-            self.assertNotIn("error", out["data"][plat])
+            content = out["data"][plat]
+            self.assertNotIn("error", content)
+            # Each platform's regenerated markdown carries its own tag —
+            # verifies backflow didn't cross-wire the two platforms.
+            self.assertIn(plat, content["markdown"],
+                          f"{plat} must receive its own regenerated content, not the other's")
+            # Backflow was attempted (structure_issue → edit_blueprint).
+            self.assertEqual(content["_meta"]["backflow"]["stage"], "blueprint")
 
     def test_backflow_result_none_degrades_to_expression_weak(self):
         """Without result, fact_insufficient can't rerun research → expression_weak."""
@@ -1498,6 +1514,18 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("3/ CTA", rendered)
         # No markdown body when thread is present — thread replaces it.
         self.assertNotIn("markdown", rendered.lower())
+
+    def test_optimize_blank_thread_falls_back_to_markdown(self):
+        """A non-empty but all-blank thread (models sometimes emit [""]) must
+        not silently discard the markdown body."""
+        from promoagent.optimize import _format_platform_content
+        rendered = _format_platform_content({
+            "title": "标题",
+            "markdown": "正文内容",
+            "thread": ["", ""],
+        })
+        self.assertIn("# 标题", rendered)
+        self.assertIn("正文内容", rendered)
 
     def test_optimize_runs_with_full_fields(self):
         """run_optimize writes the enriched content to the platform file."""

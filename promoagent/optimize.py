@@ -149,10 +149,12 @@ def _format_platform_content(item: Any) -> str:
     if title:
         parts.append(f"# {title}")
 
-    # Twitter/X threads: render as a numbered thread block.
-    thread = item.get("thread") or []
-    if isinstance(thread, list) and thread:
-        parts.append("\n".join(f"{i+1}/ {t}" for i, t in enumerate(thread) if t))
+    # Twitter/X threads: render as a numbered thread block. Fall back to the
+    # markdown body when the thread is absent OR non-empty but all-blank
+    # (models occasionally emit thread: [""] — don't drop the body for that).
+    thread = [t for t in (item.get("thread") or []) if t]
+    if thread:
+        parts.append("\n".join(f"{i+1}/ {t}" for i, t in enumerate(thread)))
     else:
         body = str(item.get("markdown") or "").strip()
         if body:
