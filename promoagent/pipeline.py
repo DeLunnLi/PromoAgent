@@ -19,6 +19,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,32 @@ def _sanitize_for_prompt(text: Any) -> str:
     if len(flat) > _SANITIZED_TEXT_LIMIT:
         flat = flat[:_SANITIZED_TEXT_LIMIT] + "…"
     return flat
+
+
+@dataclass
+class _ProduceContext:
+    """Aggregates backflow prerequisites so they flow as one object instead of
+    six separate kwargs through ``_generate_single_platform`` →
+    ``_review_and_rewrite`` → ``_backflow_*``.
+
+    ``None`` fields mean the prerequisite is absent — backflow degrades to
+    produce-only rewrite. The predicate methods keep that gating logic in one
+    place instead of scattered ``and ... is not None`` chains.
+    """
+    state: "PipelineState | None" = None
+    result: dict[str, Any] | None = None
+    full_research: dict[str, Any] | None = None
+    full_blueprint: dict[str, Any] | None = None
+    blueprint_data: dict[str, Any] | None = None
+    references: list[str] | None = None
+    quality_mode: str = QUALITY_BALANCED
+
+    def can_backflow_research(self) -> bool:
+        return self.state is not None and self.result is not None and self.full_research is not None
+
+    def can_backflow_blueprint(self) -> bool:
+        return self.full_blueprint is not None and self.blueprint_data is not None
+
 
 # ---------------------------------------------------------------------------
 # Pipeline State Management
@@ -714,11 +741,7 @@ def _generate_single_platform(
     options: dict[str, Any],
     quality_mode: str = QUALITY_BALANCED,
     references: list[str] | None = None,
-    *,
-    state: "PipelineState | None" = None,
-    result: dict[str, Any] | None = None,
-    full_research: dict[str, Any] | None = None,
-    full_blueprint: dict[str, Any] | None = None,
+    ctx: _ProduceContext | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Generate content for a single platform.
     ``quality_mode`` controls enrichment:
@@ -813,11 +836,7 @@ def _generate_single_platform(
     # --- Polished: critic review + conditional backflow ---
     if quality_mode == QUALITY_POLISHED and "error" not in parsed:
         parsed = _review_and_rewrite(
-            platform, parsed, research_data, spec, messages, response, options,
-            state=state, result=result,
-            full_research=full_research, full_blueprint=full_blueprint,
-            blueprint_data=blueprint_data, references=references,
-            quality_mode=quality_mode,
+            platform, parsed, research_data, spec, messages, response, options, ctx,
         )
 
     return platform, parsed
@@ -831,25 +850,19 @@ def _review_and_rewrite(
     original_messages: list[dict[str, str]],
     original_response: str,
     options: dict[str, Any],
-    *,
-    state: "PipelineState | None" = None,
-    result: dict[str, Any] | None = None,
-    full_research: dict[str, Any] | None = None,
-    full_blueprint: dict[str, Any] | None = None,
-    blueprint_data: dict[str, Any] | None = None,
-    references: list[str] | None = None,
-    quality_mode: str = QUALITY_POLISHED,
+    ctx: _ProduceContext | None = None,
 ) -> dict[str, Any]:
     """Critic pass + cross-stage backflow. At most one backflow attempt.
 
-    Routes the critic's primary_problem_type:
+    Routes the critic's primary_problem_type via :func:`_route_backflow`:
     - fact_insufficient → re-run research (via clarifications) + blueprint + this platform
     - structure_issue  → edit_blueprint with suggested_edits + re-run this platform
     - expression_weak  → existing _rewrite_platform (produce-only)
     """
+    ctx = ctx or _ProduceContext()
     critique = _critic_platform(platform, content, research_data, spec, options)
     meta: dict[str, Any] = {
-        "quality_mode": quality_mode,
+        "quality_mode": ctx.quality_mode,
         "critique": critique,
         "rewritten": False,
         "backflow": None,
@@ -873,20 +886,18 @@ def _review_and_rewrite(
     problem_type = critique.get("primary_problem_type", "expression_weak")
     pre_score = critique.get("total", 0)
 
-    backflow_stage = "none"
-    if problem_type == "fact_insufficient" and state is not None and result is not None and full_research is not None:
-        new_content = _backflow_research(platform, critique, state, result, full_research,
-                                         full_blueprint, blueprint_data, references, options, quality_mode)
-        if new_content is not None:
-            content = new_content
-            backflow_stage = "research"
-    elif problem_type == "structure_issue" and full_blueprint is not None and blueprint_data is not None:
-        new_content = _backflow_blueprint(platform, critique, blueprint_data, research_data,
-                                          references, options, quality_mode)
-        if new_content is not None:
-            content = new_content
-            backflow_stage = "blueprint"
-    else:
+    # Route to a cross-stage backflow when applicable. `routed` distinguishes
+    # "no branch matched" (→ fall through to produce-only rewrite) from
+    # "a branch matched but the upstream rerun failed" (→ keep original, do NOT
+    # rewrite). The elif chain in the old code implied this; the triple makes
+    # it explicit so a failed backflow isn't mistaken for an un-routed case.
+    new_content, backflow_stage, routed = _route_backflow(
+        platform, problem_type, critique, research_data,
+        original_messages, original_response, options, ctx,
+    )
+    if new_content is not None:
+        content = new_content
+    if not routed:
         # expression_weak or missing prerequisites — produce-only rewrite.
         rewritten = _rewrite_platform(original_messages, original_response, critique, options)
         if rewritten and "error" not in rewritten:
@@ -909,6 +920,31 @@ def _review_and_rewrite(
     return content
 
 
+def _route_backflow(
+    platform: str,
+    problem_type: str,
+    critique: dict[str, Any],
+    research_data: dict[str, Any],
+    original_messages: list[dict[str, str]],
+    original_response: str,
+    options: dict[str, Any],
+    ctx: _ProduceContext,
+) -> tuple[dict[str, Any] | None, str, bool]:
+    """Pick a cross-stage backflow branch based on ``problem_type``.
+
+    Returns ``(new_content, stage, routed)``:
+    - ``routed=False`` → no branch matched (or prerequisites missing); caller
+      should fall back to produce-only rewrite.
+    - ``routed=True``  → a branch matched; ``new_content`` may still be ``None``
+      if the upstream rerun failed (caller keeps the original, does NOT rewrite).
+    """
+    if problem_type == "fact_insufficient" and ctx.can_backflow_research():
+        return _backflow_platform("research", platform, critique, ctx, research_data, options), "research", True
+    if problem_type == "structure_issue" and ctx.can_backflow_blueprint():
+        return _backflow_platform("blueprint", platform, critique, ctx, research_data, options), "blueprint", True
+    return None, "none", False
+
+
 def _collect_suggested_edits(critique: dict[str, Any]) -> dict[str, Any]:
     """Extract edit_blueprint-compatible edits from the critique's classified_issues."""
     edits: dict[str, Any] = {}
@@ -925,24 +961,56 @@ def _collect_suggested_edits(critique: dict[str, Any]) -> dict[str, Any]:
     return edits
 
 
-def _backflow_research(
+def _backflow_platform(
+    stage: str,
     platform: str,
     critique: dict[str, Any],
-    state: "PipelineState",
-    result: dict[str, Any],
-    full_research: dict[str, Any],
-    full_blueprint: dict[str, Any] | None,
-    blueprint_data: dict[str, Any] | None,
-    references: list[str] | None,
+    ctx: _ProduceContext,
+    research_data: dict[str, Any],
     options: dict[str, Any],
-    quality_mode: str,
+) -> dict[str, Any] | None:
+    """Re-run an upstream stage, then regenerate this platform's content.
+
+    ``stage`` is "research" (re-run research + blueprint) or "blueprint"
+    (apply suggested edits). Returns the regenerated content, or ``None`` if
+    the upstream rerun failed (caller keeps the original).
+    """
+    if stage == "research":
+        return _rerun_upstream_research(platform, critique, ctx, options)
+
+    # stage == "blueprint"
+    edits = _collect_suggested_edits(critique)
+    if not edits:
+        # No actionable edits → nothing to change upstream. Silent (no warning):
+        # this isn't a failure, just an un-actionable critique.
+        return None
+    try:
+        new_blueprint = edit_blueprint({"data": ctx.blueprint_data}, edits)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("backflow edit_blueprint failed", platform=platform, error=str(exc))
+        return None
+    return _regenerate_platform(platform, new_blueprint.get("data") or {},
+                                research_data, ctx.references, options, ctx.quality_mode)
+
+
+def _rerun_upstream_research(
+    platform: str,
+    critique: dict[str, Any],
+    ctx: _ProduceContext,
+    options: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Re-run research with fact-gap hints, then blueprint, then this platform.
 
-    Works on local copies only — does NOT write research/blueprint back to
-    state (avoids clobbering concurrent platform workers' shared state).
+    NOTE: ``stage_research(force=True)`` and ``stage_blueprint(force=True)``
+    write their results back to the shared ``state`` (their own ``state.set``
+    calls). Under parallel produce with multiple platforms triggering this
+    backflow simultaneously, research/blueprint get re-run once per platform
+    and the last writer wins — the RLock on PipelineState prevents dict
+    corruption, but the semantic overlap is an accepted trade-off (each
+    platform still regenerates from its own freshly-returned ``new_research``
+    / ``new_blueprint`` local reference).
     """
-    # 1. Write fact-gap hints into clarifications (merged, not overwriting user answers).
+    # Write fact-gap hints into clarifications (merged, not overwriting user answers).
     # Sanitize each description before injection — it's LLM-sourced text going
     # back into the research prompt, so cap length and strip newlines.
     fact_gaps = [
@@ -950,46 +1018,24 @@ def _backflow_research(
         for i in (critique.get("classified_issues") or [])
         if isinstance(i, dict) and i.get("type") == "fact_insufficient" and i.get("description")
     ]
-    clar = dict(state.get("clarifications") or {})
+    clar = dict(ctx.state.get("clarifications") or {})
     answers = dict(clar.get("answers") or {})
     for gap in fact_gaps[:3]:
         answers.setdefault(gap, "请补充可核验的事实或数据")
     clar["answers"] = answers
     clar["timestamp"] = time.time()
     # Write to state so stage_research can read it (research reads state).
-    state.set("clarifications", clar)
+    ctx.state.set("clarifications", clar)
 
     try:
-        new_research = stage_research(result, state, options, force=True, search=False)
-        new_blueprint = stage_blueprint(new_research, state, result, options, force=True)
+        new_research = stage_research(ctx.result, ctx.state, options, force=True, search=False)
+        new_blueprint = stage_blueprint(new_research, ctx.state, ctx.result, options, force=True)
     except Exception as exc:  # noqa: BLE001
         logger.warning("backflow research rerun failed", platform=platform, error=str(exc))
         return None
 
     return _regenerate_platform(platform, new_blueprint.get("data") or {},
-                                new_research.get("data") or {}, references, options, quality_mode)
-
-
-def _backflow_blueprint(
-    platform: str,
-    critique: dict[str, Any],
-    blueprint_data: dict[str, Any],
-    research_data: dict[str, Any],
-    references: list[str] | None,
-    options: dict[str, Any],
-    quality_mode: str,
-) -> dict[str, Any] | None:
-    """Apply suggested edits to the blueprint, then re-run this platform."""
-    edits = _collect_suggested_edits(critique)
-    if not edits:
-        return None
-    try:
-        new_blueprint = edit_blueprint({"data": blueprint_data}, edits)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("backflow edit_blueprint failed", platform=platform, error=str(exc))
-        return None
-    return _regenerate_platform(platform, new_blueprint.get("data") or {},
-                                research_data, references, options, quality_mode)
+                                new_research.get("data") or {}, ctx.references, options, ctx.quality_mode)
 
 
 def _regenerate_platform(
@@ -1176,6 +1222,16 @@ def stage_produce(
     # Reference ads for balanced/polished few-shot injection.
     references = (state.get("references") or {}).get("examples") or []
 
+    # Bundle backflow prerequisites into one context object so they flow
+    # through _generate_single_platform → _review_and_rewrite without a
+    # six-kwargs parameter list.
+    ctx = _ProduceContext(
+        state=state, result=result,
+        full_research=research, full_blueprint=blueprint,
+        blueprint_data=blueprint_data, references=references,
+        quality_mode=quality_mode,
+    )
+
     logger.info("running produce stage", platforms=target_platforms, parallel=parallel, quality_mode=quality_mode)
 
     results = {}
@@ -1192,10 +1248,7 @@ def stage_produce(
                     options or {},
                     quality_mode,
                     references,
-                    state=state,
-                    result=result,
-                    full_research=research,
-                    full_blueprint=blueprint,
+                    ctx,
                 ): platform
                 for platform in target_platforms
             }
@@ -1213,9 +1266,7 @@ def stage_produce(
         for platform in target_platforms:
             _, content = _generate_single_platform(
                 platform, blueprint_data, research_data, options or {},
-                quality_mode, references,
-                state=state, result=result,
-                full_research=research, full_blueprint=blueprint,
+                quality_mode, references, ctx,
             )
             results[platform] = content
 

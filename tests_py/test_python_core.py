@@ -1309,6 +1309,92 @@ class PythonCoreTest(unittest.TestCase):
         # Short text passes through.
         self.assertEqual(_sanitize_for_prompt("ok"), "ok")
 
+    def test_backflow_research_upstream_failure_keeps_original(self):
+        """When fact_insufficient routes but stage_research raises, the original
+        content is kept and NO produce-only rewrite runs (routed=True path)."""
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            user = m[-1]["content"] if m else ""
+            if "评审以下" in user or "待评内容" in user:  # critic → fact_insufficient
+                return json.dumps({
+                    "scores": {"fidelity": 2, "engagement": 4, "alignment": 4},
+                    "classified_issues": [{"type": "fact_insufficient", "description": "缺数据"}],
+                    "primary_problem_type": "fact_insufficient",
+                    "issues": ["缺数据"], "improvements": ["补数据"],
+                }, ensure_ascii=False)
+            # Any research rerun → raise to simulate upstream failure.
+            if "推广策略" in user or "research" in user.lower():
+                raise RuntimeError("research rerun exploded")
+            return json.dumps({"markdown": "内容"}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("backflow-upstream-fail", cache_dir=Path(tmp))
+            state.set("research", research)
+            state.set("blueprint", blueprint)
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch), \
+                 patch.object(pipeline, "find_examples", lambda r, **kw: []):
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False, result=result)
+        meta = out["data"]["xiaohongshu"]["_meta"]
+        # Routed to research backflow (attempted=True), but upstream failed →
+        # original content kept and NO produce-only rewrite (routed path).
+        self.assertTrue(meta["backflow"]["attempted"])
+        self.assertEqual(meta["backflow"]["stage"], "research")
+        self.assertFalse(meta["rewritten"], "must NOT rewrite when a backflow branch was routed")
+        self.assertEqual(out["data"]["xiaohongshu"].get("markdown"), "内容")
+
+    def test_backflow_blueprint_no_edits_returns_none_silently(self):
+        """structure_issue with no actionable suggested_edit → silent None, no warning."""
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        warnings = []
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            user = m[-1]["content"] if m else ""
+            if "评审以下" in user or "待评内容" in user:  # critic → structure_issue, no suggested_edit
+                return json.dumps({
+                    "scores": {"fidelity": 4, "engagement": 4, "alignment": 2},
+                    "classified_issues": [{"type": "structure_issue", "description": "结构",
+                                           "suggested_edit": None}],
+                    "primary_problem_type": "structure_issue",
+                    "issues": ["结构"], "improvements": ["调"],
+                }, ensure_ascii=False)
+            return json.dumps({"markdown": "内容"}, ensure_ascii=False)
+
+        real_warning = pipeline.logger.warning
+
+        def spy_warning(msg, **kw):
+            warnings.append(msg)
+            real_warning(msg, **kw)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("backflow-no-edits", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch), \
+                 patch.object(pipeline, "find_examples", lambda r, **kw: []), \
+                 patch.object(pipeline, "logger") as mock_logger:
+                mock_logger.warning = spy_warning
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False)
+        meta = out["data"]["xiaohongshu"]["_meta"]
+        # Routed to blueprint (attempted=True) but no edits → no upstream change,
+        # original kept, and crucially NO warning logged (empty edits are not a failure).
+        self.assertTrue(meta["backflow"]["attempted"])
+        self.assertEqual(meta["backflow"]["stage"], "blueprint")
+        self.assertFalse(meta["rewritten"])
+        edit_warnings = [w for w in warnings if "edit_blueprint" in str(w)]
+        self.assertEqual(edit_warnings, [], "empty edits must not log a warning")
+
     # ------------------------------------------------------------------
     # Pipeline: run_pipeline
     # ------------------------------------------------------------------
