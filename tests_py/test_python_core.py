@@ -1575,6 +1575,24 @@ class PythonCoreTest(unittest.TestCase):
         )
         self.assertIn("--no-search", result.stdout)
 
+    def test_python_cli_json_failure_outputs_structured_error(self):
+        """When --json mode fails, stdout gets a {ok:false,error} object so
+        scripts/CI/MCP callers can parse the failure instead of empty stdout."""
+        env = {**os.environ, "PROMOAGENT_CACHE_DIR": str(Path(tempfile.mkdtemp()))}
+        # Point at a dead base_url to force a network failure regardless of
+        # whether the host has working API keys.
+        result = subprocess.run(
+            [sys.executable, "-m", "promoagent", "draft",
+             str(FIXTURES / "healthy-repo"), "--no-search", "--stage", "research",
+             "--json", "--base-url", "http://127.0.0.1:1"],
+            cwd=ROOT, env=env, text=True, capture_output=True, timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        # stdout must be parseable JSON with an error field (not empty).
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["error"])
+
     def test_python_cli_serve_launches_mcp_server(self):
         """`serve` now launches the MCP server over stdio."""
         import json as _json

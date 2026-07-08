@@ -231,7 +231,10 @@ class PipelineState:
 
     def __init__(self, source_id: str, cache_dir: Path | None = None):
         self.source_id = source_id
-        self.cache_dir = cache_dir or Path.home() / ".cache" / "promoagent" / "pipeline"
+        self.cache_dir = cache_dir or Path(
+            os.environ.get("PROMOAGENT_CACHE_DIR")
+            or Path.home() / ".cache" / "promoagent" / "pipeline"
+        )
         self.state_file = self.cache_dir / f"pipeline_{source_id}.json"
         self.stages: dict[str, Any] = {}
         self.metadata: dict[str, Any] = {

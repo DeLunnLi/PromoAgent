@@ -30,14 +30,26 @@ def main(argv: list[str] | None = None) -> int:
         }
         return cmd_map.get(args.command, _run_analyze)(args)
     except (RuntimeError, ValueError, FileNotFoundError) as error:
-        print_error(str(error))
+        _report_error(args, str(error))
         return 1
     except Exception as error:
         # Catch-all for unexpected errors
-        print_error(f"Unexpected error: {error}")
+        msg = f"Unexpected error: {error}"
+        _report_error(args, msg)
         if os.environ.get("DEBUG") or os.environ.get("PROMOAGENT_DEBUG"):
             console.print_exception()
         return 1
+
+
+def _report_error(args: argparse.Namespace, message: str) -> None:
+    """Surface an error to both the human (stderr) and, in --json mode, the
+    machine (stdout). Without the stdout path, scripts/CI/MCP callers that
+    parse ``--json`` output get an empty stdout on failure and can't tell
+    why."""
+    print_error(message)
+    if getattr(args, "json", False) and not getattr(args, "output", None):
+        # Emit a structured error to stdout so JSON consumers can parse it.
+        sys.stdout.write(json.dumps({"ok": False, "error": message}, ensure_ascii=False) + "\n")
 
 
 def _build_parser() -> argparse.ArgumentParser:

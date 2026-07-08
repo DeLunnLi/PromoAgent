@@ -14,6 +14,7 @@ unit tests with mocked dispatch_chat.
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -25,13 +26,21 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests_py" / "fixtures"
 
 
-def _server_params() -> StdioServerParameters:
-    """Launch promoagent-mcp as a subprocess, isolated from the host env."""
+def _server_params(cache_dir: Path | None = None) -> StdioServerParameters:
+    """Launch promoagent-mcp as a subprocess, isolated from the host env.
+
+    ``cache_dir`` redirects PipelineState away from the real ~/.cache so E2E
+    tests don't pollute (or read) the user's actual pipeline state — without
+    this, a passing E2E run leaves stale mock data that later makes real
+    ``draft`` invocations return cached test fixtures.
+    """
     env = {
         "PATH": os.environ.get("PATH", ""),
         "PROMOAGENT_LOG_LEVEL": "WARNING",
         # Keep AI keys out so no accidental network calls happen during E2E.
     }
+    if cache_dir is not None:
+        env["PROMOAGENT_CACHE_DIR"] = str(cache_dir)
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "promoagent.mcp_server"],
@@ -41,16 +50,26 @@ def _server_params() -> StdioServerParameters:
 
 class TestMcpEndToEnd(unittest.IsolatedAsyncioTestCase):
 
+    def setUp(self) -> None:
+        # Isolate pipeline state to a temp dir so E2E doesn't pollute the
+        # user's real ~/.cache/promoagent/pipeline (which would make later
+        # real `draft` runs return stale test fixtures).
+        self._cache_dir = tempfile.TemporaryDirectory()
+        self._cache_path = Path(self._cache_dir.name)
+
+    def tearDown(self) -> None:
+        self._cache_dir.cleanup()
+
     async def _run_session(self, fn: Callable[[ClientSession], Awaitable[Any]]) -> Any:
         """Spawn the server, open a client session, run fn(session), then tear down."""
-        async with stdio_client(_server_params()) as (read, write):
+        async with stdio_client(_server_params(self._cache_path)) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await fn(session)
 
     async def test_initialize_handshake(self):
         """The server responds to initialize with its serverInfo."""
-        async with stdio_client(_server_params()) as (read, write):
+        async with stdio_client(_server_params(self._cache_path)) as (read, write):
             async with ClientSession(read, write) as session:
                 result = await session.initialize()
         self.assertEqual(result.serverInfo.name, "promoagent")
