@@ -1039,6 +1039,15 @@ class PythonCoreTest(unittest.TestCase):
                                         {"api_key": "k"})
         self.assertEqual(critique["primary_problem_type"], "expression_weak")
 
+    def test_critic_prompt_problem_types_match_constant(self):
+        """The prompt's problem-type lists must equal _CRITIC_PROBLEM_TYPES —
+        if they drift, the critic's stated types and the normalization gate
+        can disagree on what's a valid backflow trigger."""
+        from promoagent.pipeline import _build_critic_user_prompt, _CRITIC_PROBLEM_TYPES, _CRITIC_PRIMARY_TYPES
+        prompt = _build_critic_user_prompt("xiaohongshu", {"markdown": "x"}, "", {"style": "s"})
+        self.assertIn("|".join(_CRITIC_PROBLEM_TYPES), prompt)
+        self.assertIn("|".join(_CRITIC_PRIMARY_TYPES), prompt)
+
     def test_backflow_expression_weak_uses_rewrite(self):
         """expression_weak → produce-only rewrite, no upstream rerun."""
         blueprint = {"data": {"positioning": {"one_liner": "L"},

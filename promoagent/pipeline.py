@@ -78,6 +78,104 @@ def _sanitize_for_prompt(text: Any) -> str:
     return flat
 
 
+# ---------------------------------------------------------------------------
+# Critic prompt + normalization helpers
+#
+# The problem-type tuple is the single source of truth shared by the critic
+# prompt text and the output-normalization gate — joining it reproduces the
+# old literal "fact_insufficient|structure_issue|expression_weak" byte-for-byte,
+# so prompt and gate can never drift apart.
+# ---------------------------------------------------------------------------
+
+_CRITIC_SCORE_AXES = ("fidelity", "engagement", "alignment")
+_CRITIC_PROBLEM_TYPES = ("fact_insufficient", "structure_issue", "expression_weak")
+_CRITIC_PRIMARY_TYPES = _CRITIC_PROBLEM_TYPES + ("none",)  # primary_problem_type also allows "none"
+_CRITIC_DEGRADE_PRIMARY = "expression_weak"  # conservative fallback when the critic output is malformed
+
+_CRITIC_SYSTEM_PROMPT_TEMPLATE = (
+    "你是{platform}内容质量评审。对生成内容按三轴打分（1-5）并给出具体问题。"
+    "输出严格 JSON。"
+)
+
+# Prompt-side renderings of the type lists — derived from the same tuples the
+# normalization gate uses, so the prompt and the gate cannot disagree.
+_CRITIC_PROBLEM_TYPES_PROMPT = "|".join(_CRITIC_PROBLEM_TYPES)
+_CRITIC_PRIMARY_TYPES_PROMPT = "|".join(_CRITIC_PRIMARY_TYPES)
+
+
+def _build_critic_user_prompt(platform: str, content: dict[str, Any],
+                              facts_block: str, spec: dict[str, Any]) -> str:
+    """Render the critic's user prompt (static schema/definitions + dynamic payload)."""
+    facts_section = f"【研究事实】\n{facts_block}" if facts_block else "【研究事实】（无）"
+    return f"""评审以下{platform}内容：
+
+{facts_section}
+
+【平台规格】
+{json.dumps(spec, ensure_ascii=False)}
+
+【待评内容】
+标题：{content.get('title', '')}
+正文：{content.get('markdown', '')}
+标签：{content.get('hashtags', [])}
+
+请按以下 JSON 格式输出评分：
+{{
+  "scores": {{
+    "fidelity": 1-5,
+    "engagement": 1-5,
+    "alignment": 1-5
+  }},
+  "classified_issues": [
+    {{
+      "type": "{_CRITIC_PROBLEM_TYPES_PROMPT}",
+      "description": "具体问题描述",
+      "suggested_edit": {{"_selectVariant": {{"hook-main": 1}}}} or null
+    }}
+  ],
+  "primary_problem_type": "{_CRITIC_PRIMARY_TYPES_PROMPT}",
+  "issues": ["具体问题1：哪里偏离了事实/开头不够抓人/不像平台原生", "..."],
+  "improvements": ["对应改进建议1", "..."]
+}}
+
+三轴定义：
+- fidelity（事实保真）：内容是否可核验、是否包含研究关键事实、有无编造
+- engagement（吸引力）：开头3秒是否抓人、是否有具体场景/数字、是否避免模板腔
+- alignment（平台原生感）：是否符合平台风格/结构/长度、是否像广告感而非真实分享
+
+问题分类：
+- fact_insufficient：事实不足/编造 → 需要回 research 补证据
+- structure_issue：结构/顺序/变体选择不对 → 需要回 blueprint 调结构（suggested_edit 给出 edit_blueprint 格式的编辑，如 _selectVariant/_setStructure/_reorder）
+- expression_weak：表达/语气/用词不佳 → 只需重写 produce
+- none：无明显问题
+
+primary_problem_type 选最严重的一类。suggested_edit 仅 structure_issue 时给，其他填 null。"""
+
+
+def _critic_should_rewrite(scores: dict[str, Any], total: int) -> bool:
+    """Rewrite when any axis drops below 3 or the total is under 10."""
+    return any(int(scores.get(k, 0) or 0) < 3 for k in _CRITIC_SCORE_AXES) or total < 10
+
+
+def _normalize_critique(critique: dict[str, Any]) -> dict[str, Any]:
+    """Tolerate non-standard critic output.
+
+    Coalesces the two old ad-hoc guards (classified_issues shape + primary
+    problem type) into one place. MUST NOT touch scores/total/should_rewrite —
+    those are computed by the caller after this returns.
+    """
+    classified = critique.get("classified_issues")
+    if not isinstance(classified, list) or not classified:
+        critique["classified_issues"] = []
+    primary = critique.get("primary_problem_type")
+    if primary not in _CRITIC_PRIMARY_TYPES:
+        # Conservative degradation: only rewrite produce, never trigger an
+        # upstream backflow on an ambiguous signal.
+        primary = _CRITIC_DEGRADE_PRIMARY
+    critique["primary_problem_type"] = primary
+    return critique
+
+
 @dataclass
 class _ProduceContext:
     """Aggregates backflow prerequisites so they flow as one object instead of
@@ -1073,83 +1171,26 @@ def _critic_platform(
     config = ai_config(options)
     facts_block = _build_facts_block(research_data)
 
-    system_prompt = f"你是{platform}内容质量评审。对生成内容按三轴打分（1-5）并给出具体问题。输出严格 JSON。"
-    user_prompt = f"""评审以下{platform}内容：
-
-{f'【研究事实】\n{facts_block}' if facts_block else '【研究事实】（无）'}
-
-【平台规格】
-{json.dumps(spec, ensure_ascii=False)}
-
-【待评内容】
-标题：{content.get('title', '')}
-正文：{content.get('markdown', '')}
-标签：{content.get('hashtags', [])}
-
-请按以下 JSON 格式输出评分：
-{{
-  "scores": {{
-    "fidelity": 1-5,
-    "engagement": 1-5,
-    "alignment": 1-5
-  }},
-  "classified_issues": [
-    {{
-      "type": "fact_insufficient|structure_issue|expression_weak",
-      "description": "具体问题描述",
-      "suggested_edit": {{"_selectVariant": {{"hook-main": 1}}}} or null
-    }}
-  ],
-  "primary_problem_type": "fact_insufficient|structure_issue|expression_weak|none",
-  "issues": ["具体问题1：哪里偏离了事实/开头不够抓人/不像平台原生", "..."],
-  "improvements": ["对应改进建议1", "..."]
-}}
-
-三轴定义：
-- fidelity（事实保真）：内容是否可核验、是否包含研究关键事实、有无编造
-- engagement（吸引力）：开头3秒是否抓人、是否有具体场景/数字、是否避免模板腔
-- alignment（平台原生感）：是否符合平台风格/结构/长度、是否像广告感而非真实分享
-
-问题分类：
-- fact_insufficient：事实不足/编造 → 需要回 research 补证据
-- structure_issue：结构/顺序/变体选择不对 → 需要回 blueprint 调结构（suggested_edit 给出 edit_blueprint 格式的编辑，如 _selectVariant/_setStructure/_reorder）
-- expression_weak：表达/语气/用词不佳 → 只需重写 produce
-- none：无明显问题
-
-primary_problem_type 选最严重的一类。suggested_edit 仅 structure_issue 时给，其他填 null。"""
+    messages = [
+        {"role": "system", "content": _CRITIC_SYSTEM_PROMPT_TEMPLATE.format(platform=platform)},
+        {"role": "user", "content": _build_critic_user_prompt(platform, content, facts_block, spec)},
+    ]
 
     try:
-        response = dispatch_chat(
-            [{"role": "system", "content": system_prompt},
-             {"role": "user", "content": user_prompt}],
-            config,
-        )
+        response = dispatch_chat(messages, config)
         critique = parse_json_content(response)
     except Exception as exc:  # noqa: BLE001 — critic failure must not break generation
         logger.warning("critic failed", platform=platform, error=str(exc))
         return {"scores": {}, "issues": [], "improvements": [], "total": 0,
-                "should_rewrite": False, "primary_problem_type": "expression_weak",
+                "should_rewrite": False, "primary_problem_type": _CRITIC_DEGRADE_PRIMARY,
                 "classified_issues": [], "error": str(exc)}
 
-    scores = critique.get("scores", {}) or {}
-    total = sum(int(scores.get(k, 0) or 0) for k in ("fidelity", "engagement", "alignment"))
-    critique["total"] = total
-    critique["should_rewrite"] = any(int(scores.get(k, 0) or 0) < 3 for k in ("fidelity", "engagement", "alignment")) or total < 10
+    _normalize_critique(critique)
 
-    # Tolerate older critic outputs that lack classified_issues: degrade to
-    # expression_weak so existing behavior (rewrite produce only) is preserved.
-    classified = critique.get("classified_issues")
-    if not isinstance(classified, list) or not classified:
-        critique["classified_issues"] = []
-    primary = critique.get("primary_problem_type")
-    if primary not in ("fact_insufficient", "structure_issue", "expression_weak", "none"):
-        # Conservative degradation: when the critic didn't emit a structured
-        # primary_problem_type (older outputs / partial JSON), stay on
-        # expression_weak so we only rewrite produce — never trigger an
-        # upstream backflow on ambiguous signal. This preserves existing
-        # rewrite-only behavior.
-        primary = "expression_weak"
-    critique["primary_problem_type"] = primary
+    scores = critique.get("scores", {}) or {}
+    total = sum(int(scores.get(k, 0) or 0) for k in _CRITIC_SCORE_AXES)
+    critique["total"] = total
+    critique["should_rewrite"] = _critic_should_rewrite(scores, total)
     return critique
 
 
