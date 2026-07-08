@@ -129,6 +129,16 @@ DEFAULT_OPENAI_BASE  = "https://api.openai.com/v1"
 DEFAULT_MODELSCOPE_BASE = "https://api-inference.modelscope.cn/v1"
 DEFAULT_IMAGE_MODEL  = "Qwen/Qwen-Image"
 FETCH_TIMEOUT = 15
+# Cap upstream API error bodies surfaced in exceptions. Provider responses can
+# echo request metadata or prompt fragments; keep enough to debug, never the
+# full body. Also strips newlines so multi-line responses stay on one log line.
+_ERROR_BODY_LIMIT = 200
+
+
+def _sanitize_error_body(body: str) -> str:
+    """Trim and flatten an upstream API error response for safe logging."""
+    text = " ".join(str(body or "").split())
+    return text[:_ERROR_BODY_LIMIT] + ("…" if len(text) > _ERROR_BODY_LIMIT else "")
 
 
 # ---------------------------------------------------------------------------
@@ -746,7 +756,7 @@ def generate_modelscope_image(
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
             task_data = json.loads(resp.read())
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
+        detail = _sanitize_error_body(exc.read().decode("utf-8", errors="replace"))
         raise RuntimeError(f"Image API error {exc.code}: {detail}") from exc
 
     task_id = task_data.get("task_id") or task_data.get("id")
@@ -772,7 +782,7 @@ def generate_modelscope_image(
             image_url = image_urls[0]
             break
         if status in ("FAILED", "ERROR", "CANCELLED"):
-            raise RuntimeError(f"Image generation {status}: {status_data}")
+            raise RuntimeError(f"Image generation failed: status={status}")
     else:
         raise RuntimeError(f"Image generation timed out after {config['timeoutMs']}ms")
 
@@ -855,7 +865,7 @@ def generate_openai_image(
                 data = json.loads(resp.read())
             break
         except urllib.error.HTTPError as exc:
-            last_error = exc.read().decode("utf-8", errors="replace")
+            last_error = _sanitize_error_body(exc.read().decode("utf-8", errors="replace"))
             if exc.code not in (400, 422, 500, 502, 503, 504):
                 raise RuntimeError(f"OpenAI Image API error {exc.code}: {last_error}") from exc
 
@@ -864,7 +874,7 @@ def generate_openai_image(
 
     items = data.get("data") or []
     if not items:
-        raise RuntimeError(f"No image data in response: {data}")
+        raise RuntimeError("No image data in API response")
 
     item = items[0]
     out = Path(output_path)
@@ -875,7 +885,7 @@ def generate_openai_image(
     elif item.get("url"):
         urllib.request.urlretrieve(item["url"], out)
     else:
-        raise RuntimeError(f"Response item has neither b64_json nor url: {item}")
+        raise RuntimeError("Response item has neither b64_json nor url")
 
     return {
         "provider": "openai",

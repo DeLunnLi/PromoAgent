@@ -79,6 +79,7 @@ class TestMcpEndToEnd(unittest.IsolatedAsyncioTestCase):
         # Must be a single TextContent holding one JSON object, not one-per-platform.
         self.assertEqual(len(result.content), 1, "list_platforms must return one content item, not one per platform")
         payload = json.loads(result.content[0].text)
+        self.assertTrue(payload["ok"], "list_platforms should now use the _ok wrapper")
         plats = payload["platforms"]
         keys = [p["key"] for p in plats]
         self.assertIn("xiaohongshu", keys)

@@ -386,6 +386,19 @@ class PythonCoreTest(unittest.TestCase):
             self.assertTrue(state2.has("research"))
             self.assertEqual(state2.get("research")["data"]["v"], 42)
 
+    def test_pipeline_state_save_is_atomic(self):
+        """save() must not leave a .tmp file behind or a truncated state file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("atomic-src", cache_dir=Path(tmp))
+            state.set("research", {"data": {"big": "x" * 10_000}})
+            state_file = state.state_file
+            # No leftover temp files after save.
+            tmp_files = list(state_file.parent.glob("*.tmp"))
+            self.assertEqual(tmp_files, [], "atomic save must clean up the temp file")
+            # The state file itself is valid JSON (not truncated mid-write).
+            saved = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertEqual(saved["source_id"], "atomic-src")
+
     def test_source_id_is_stable_and_distinct(self):
         result_a = {"target": "a", "project": {"name": "A"}}
         result_b = {"target": "b", "project": {"name": "B"}}
@@ -1194,6 +1207,21 @@ class PythonCoreTest(unittest.TestCase):
         self.assertTrue(_is_openai_model("dall-e-3"))
         self.assertFalse(_is_openai_model("Qwen/Qwen-Image"))
         self.assertFalse(_is_openai_model("stabilityai/stable-diffusion"))
+
+    def test_sanitize_error_body_truncates_and_flattens(self):
+        from promoagent.image import _sanitize_error_body
+        # Multi-line response is flattened to one line.
+        self.assertNotIn("\n", _sanitize_error_body("line1\nline2\nline3"))
+        # Long bodies are capped.
+        long_body = "x" * 500
+        out = _sanitize_error_body(long_body)
+        self.assertLessEqual(len(out), 201)  # 200 + ellipsis
+        self.assertTrue(out.endswith("…"))
+        # Short bodies pass through (flattened only).
+        self.assertEqual(_sanitize_error_body("ok"), "ok")
+        # None / empty are safe.
+        self.assertEqual(_sanitize_error_body(""), "")
+        self.assertEqual(_sanitize_error_body(None), "")
 
     # ------------------------------------------------------------------
     # Platform publishers

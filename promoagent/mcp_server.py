@@ -67,8 +67,17 @@ def _ok(**payload: Any) -> dict[str, Any]:
     return payload
 
 
+# Cap error messages surfaced to MCP clients. Exception strings may carry
+# upstream API response bodies (prompt fragments, account hints); keep enough
+# to debug, never the full text.
+_ERROR_MSG_LIMIT = 300
+
+
 def _err(message: str, **extra: Any) -> dict[str, Any]:
-    result: dict[str, Any] = {"ok": False, "error": message}
+    text = " ".join(str(message or "").split())
+    if len(text) > _ERROR_MSG_LIMIT:
+        text = text[:_ERROR_MSG_LIMIT] + "…"
+    result: dict[str, Any] = {"ok": False, "error": text}
     result.update(extra)
     return result
 
@@ -121,10 +130,10 @@ def _impl_analyze(target: str) -> dict[str, Any]:
 
 
 def _impl_list_platforms() -> dict[str, Any]:
-    # Wrap in a dict so FastMCP serializes the whole list as a single
-    # TextContent. Returning a bare list[dict] makes FastMCP emit one
-    # TextContent per element, which AI tools can't reassemble reliably.
-    return {"platforms": [asdict(spec) for spec in list_platforms()]}
+    # Wrap in _ok(platforms=[...]) so the shape matches every other tool and
+    # FastMCP serializes it as a single TextContent (a bare list[dict] would
+    # emit one content item per element, which AI tools can't reassemble).
+    return _ok(platforms=[asdict(spec) for spec in list_platforms()])
 
 
 def _impl_research(target: str, search: bool = True,

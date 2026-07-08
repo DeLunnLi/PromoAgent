@@ -55,16 +55,24 @@ class PipelineState:
                 pass
 
     def save(self) -> None:
+        """Atomically persist state to disk.
+
+        Writes to a sibling temp file then ``os.replace`` swaps it into place.
+        ``os.replace`` is atomic on POSIX and Windows, so concurrent writers
+        (e.g. parallel MCP requests sharing a source_id) never leave a
+        half-written state file — readers see either the old or the new
+        version, never a truncated one.
+        """
         self.metadata["updated"] = time.time()
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        self.state_file.write_text(
-            json.dumps(
-                {"source_id": self.source_id, "stages": self.stages, "metadata": self.metadata},
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+        payload = json.dumps(
+            {"source_id": self.source_id, "stages": self.stages, "metadata": self.metadata},
+            ensure_ascii=False,
+            indent=2,
         )
+        tmp = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, self.state_file)
 
     def get(self, stage: str) -> dict[str, Any] | None:
         return self.stages.get(stage)

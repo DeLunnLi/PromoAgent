@@ -86,8 +86,8 @@ class TestMcpServer(_StateIsolationMixin, unittest.TestCase):
 
     def test_s2l_list_platforms_serializable(self):
         out = _impl_list_platforms()
-        # Wrapped in a dict so FastMCP emits a single TextContent (not one per item).
-        self.assertIsInstance(out, dict)
+        # Shape matches every other tool: _ok(platforms=[...]).
+        self.assertTrue(out["ok"])
         plats = out["platforms"]
         keys = [p["key"] for p in plats]
         self.assertIn("xiaohongshu", keys)
@@ -297,6 +297,20 @@ class TestMcpServer(_StateIsolationMixin, unittest.TestCase):
             "s2l_edit_blueprint", "s2l_image_brief", "s2l_list_platforms",
             "s2l_produce", "s2l_research",
         ])
+
+    def test_err_truncates_long_messages(self):
+        """_err caps message length so upstream API bodies don't leak to clients."""
+        from promoagent.mcp_server import _err
+        long = "x" * 500
+        out = _err(long)
+        self.assertFalse(out["ok"])
+        self.assertLessEqual(len(out["error"]), 301)  # 300 + ellipsis
+        self.assertTrue(out["error"].endswith("…"))
+
+    def test_err_flattens_newlines(self):
+        from promoagent.mcp_server import _err
+        out = _err("line1\nline2\nline3")
+        self.assertNotIn("\n", out["error"])
 
     def test_main_without_mcp_exits_nonzero(self):
         with patch.object(mcp_server, "_MCP_AVAILABLE", False):
