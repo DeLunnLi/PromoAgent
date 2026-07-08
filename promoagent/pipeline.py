@@ -118,6 +118,29 @@ class PipelineState:
     def has(self, stage: str) -> bool:
         return stage in self.stages
 
+    def is_stale(self, stage: str, upstream: str) -> bool:
+        """Return True if ``stage``'s cached ``_upstream`` snapshot is older than
+        the current ``upstream`` output — i.e. the upstream was regenerated
+        after this stage was last built, so the cache is stale.
+
+        Returns False when either side is missing (no cache, or old cache
+        without the ``_upstream`` field), so the first run self-heals without
+        forcing a recompute.
+        """
+        cached = self.stages.get(stage)
+        if not isinstance(cached, dict):
+            return False
+        recorded = (cached.get("_upstream") or {}).get(upstream)
+        if recorded is None:
+            return False  # old cache without upstream tracking — tolerate it
+        upstream_out = self.stages.get(upstream)
+        if not isinstance(upstream_out, dict):
+            return False
+        actual = upstream_out.get("timestamp")
+        if actual is None:
+            return False
+        return recorded != actual
+
     def clear(self) -> None:
         self.stages = {}
         self.save()
@@ -189,6 +212,16 @@ def stage_research(
     state.set("references", references)
     references_block = format_examples_for_prompt(references["examples"])
 
+    # Clarifications: user answers from --interactive gaps prompting, OR
+    # fact-gap feedback written by a produce-stage backflow. Either way, the
+    # research stage should treat them as "please cover these" hints.
+    clarifications_block = ""
+    clar = state.get("clarifications")
+    if clar and clar.get("answers"):
+        lines = [f"- {q}: {a}" for q, a in clar["answers"].items() if a]
+        if lines:
+            clarifications_block = "用户/评审补充的事实要求（请重点补充这些信息，缺失则记入 gaps）：\n" + "\n".join(lines)
+
     # Build concise source summary
     source_summary = {
         "name": project.get("name", ""),
@@ -210,10 +243,11 @@ def stage_research(
 输出严格 JSON。"""
 
     references_section = f"\n{references_block}\n" if references_block else ""
+    clarifications_section = f"\n{clarifications_block}\n" if clarifications_block else ""
     user_prompt = f"""分析以下项目/内容，提取关键信息并制定推广策略：
 
 {json.dumps(source_summary, ensure_ascii=False, indent=2)}
-{references_section}
+{references_section}{clarifications_section}
 请输出以下格式的 JSON：
 {{
   "facts": {{
@@ -265,6 +299,7 @@ def stage_research(
         "raw": response,
         "messages": messages,
         "timestamp": time.time(),
+        "_upstream": {},  # research is the source — downstream tracks its timestamp
     }
 
     state.set("research", output)
@@ -348,7 +383,7 @@ def stage_blueprint(
 
     Creates editable Tweet Space with dynamic element selection.
     """
-    if not force and state.has("blueprint"):
+    if not force and state.has("blueprint") and not state.is_stale("blueprint", "research"):
         logger.info("using cached blueprint stage")
         return state.get("blueprint")
 
@@ -474,6 +509,7 @@ def stage_blueprint(
         if element.get("id") in ["hook-main", "cta-main"]:
             element["variants"] = element.get("variants", [])[:3]
 
+    research_ts = research.get("timestamp") if isinstance(research, dict) else None
     output = {
         "stage": "blueprint",
         "data": parsed,
@@ -481,6 +517,7 @@ def stage_blueprint(
         "messages": messages,
         "timestamp": time.time(),
         "interactive": True,
+        "_upstream": {"research": research_ts},
     }
 
     state.set("blueprint", output)
@@ -651,9 +688,13 @@ def _generate_single_platform(
     options: dict[str, Any],
     quality_mode: str = QUALITY_BALANCED,
     references: list[str] | None = None,
+    *,
+    state: "PipelineState | None" = None,
+    result: dict[str, Any] | None = None,
+    full_research: dict[str, Any] | None = None,
+    full_blueprint: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Generate content for a single platform.
-
     ``quality_mode`` controls enrichment:
     - fast: facts only (1 LLM call)
     - balanced: facts + platform playbook + few-shot references (1 call)
@@ -743,9 +784,15 @@ def _generate_single_platform(
         logger.error(f"platform generation failed", platform=platform, error=str(e))
         return platform, {"error": str(e)}
 
-    # --- Polished: critic review + conditional rewrite ---
+    # --- Polished: critic review + conditional backflow ---
     if quality_mode == QUALITY_POLISHED and "error" not in parsed:
-        parsed = _review_and_rewrite(platform, parsed, research_data, spec, messages, response, options)
+        parsed = _review_and_rewrite(
+            platform, parsed, research_data, spec, messages, response, options,
+            state=state, result=result,
+            full_research=full_research, full_blueprint=full_blueprint,
+            blueprint_data=blueprint_data, references=references,
+            quality_mode=quality_mode,
+        )
 
     return platform, parsed
 
@@ -758,17 +805,175 @@ def _review_and_rewrite(
     original_messages: list[dict[str, str]],
     original_response: str,
     options: dict[str, Any],
+    *,
+    state: "PipelineState | None" = None,
+    result: dict[str, Any] | None = None,
+    full_research: dict[str, Any] | None = None,
+    full_blueprint: dict[str, Any] | None = None,
+    blueprint_data: dict[str, Any] | None = None,
+    references: list[str] | None = None,
+    quality_mode: str = QUALITY_POLISHED,
 ) -> dict[str, Any]:
-    """Run a critic pass; rewrite once if scores are low. Mutates content with _meta."""
+    """Critic pass + cross-stage backflow. At most one backflow attempt.
+
+    Routes the critic's primary_problem_type:
+    - fact_insufficient → re-run research (via clarifications) + blueprint + this platform
+    - structure_issue  → edit_blueprint with suggested_edits + re-run this platform
+    - expression_weak  → existing _rewrite_platform (produce-only)
+    """
     critique = _critic_platform(platform, content, research_data, spec, options)
-    meta = {"quality_mode": QUALITY_POLISHED, "critique": critique, "rewritten": False}
-    if critique.get("should_rewrite"):
+    meta: dict[str, Any] = {
+        "quality_mode": quality_mode,
+        "critique": critique,
+        "rewritten": False,
+        "backflow": None,
+    }
+
+    if not critique.get("should_rewrite"):
+        content["_meta"] = meta
+        return content
+
+    problem_type = critique.get("primary_problem_type", "expression_weak")
+    pre_score = critique.get("total", 0)
+
+    backflow_stage = "none"
+    if problem_type == "fact_insufficient" and state is not None and result is not None and full_research is not None:
+        new_content = _backflow_research(platform, critique, state, result, full_research,
+                                         full_blueprint, blueprint_data, references, options, quality_mode)
+        if new_content is not None:
+            content = new_content
+            backflow_stage = "research"
+    elif problem_type == "structure_issue" and full_blueprint is not None and blueprint_data is not None:
+        new_content = _backflow_blueprint(platform, critique, blueprint_data, research_data,
+                                          references, options, quality_mode)
+        if new_content is not None:
+            content = new_content
+            backflow_stage = "blueprint"
+    else:
+        # expression_weak or missing prerequisites — produce-only rewrite.
         rewritten = _rewrite_platform(original_messages, original_response, critique, options)
         if rewritten and "error" not in rewritten:
             content = rewritten
             meta["rewritten"] = True
+
+    # One more critic pass after backflow (no recursion). Records final score.
+    if backflow_stage != "none":
+        post_critique = _critic_platform(platform, content, research_data, spec, options)
+        meta["backflow"] = {
+            "attempted": True,
+            "stage": backflow_stage,
+            "pre_backflow_score": pre_score,
+            "post_backflow_score": post_critique.get("total", 0),
+            "reason": problem_type,
+        }
+        meta["critique"] = post_critique
+
     content["_meta"] = meta
     return content
+
+
+def _collect_suggested_edits(critique: dict[str, Any]) -> dict[str, Any]:
+    """Extract edit_blueprint-compatible edits from the critique's classified_issues."""
+    edits: dict[str, Any] = {}
+    for issue in critique.get("classified_issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        if issue.get("type") != "structure_issue":
+            continue
+        suggested = issue.get("suggested_edit")
+        if isinstance(suggested, dict):
+            for k, v in suggested.items():
+                # Don't overwrite an earlier edit of the same key.
+                edits.setdefault(k, v)
+    return edits
+
+
+def _backflow_research(
+    platform: str,
+    critique: dict[str, Any],
+    state: "PipelineState",
+    result: dict[str, Any],
+    full_research: dict[str, Any],
+    full_blueprint: dict[str, Any] | None,
+    blueprint_data: dict[str, Any] | None,
+    references: list[str] | None,
+    options: dict[str, Any],
+    quality_mode: str,
+) -> dict[str, Any] | None:
+    """Re-run research with fact-gap hints, then blueprint, then this platform.
+
+    Works on local copies only — does NOT write research/blueprint back to
+    state (avoids clobbering concurrent platform workers' shared state).
+    """
+    # 1. Write fact-gap hints into clarifications (merged, not overwriting user answers).
+    fact_gaps = [
+        i.get("description", "") for i in (critique.get("classified_issues") or [])
+        if isinstance(i, dict) and i.get("type") == "fact_insufficient" and i.get("description")
+    ]
+    clar = dict(state.get("clarifications") or {})
+    answers = dict(clar.get("answers") or {})
+    for gap in fact_gaps[:3]:
+        answers.setdefault(gap, "请补充可核验的事实或数据")
+    clar["answers"] = answers
+    clar["timestamp"] = time.time()
+    # Write to state so stage_research can read it (research reads state).
+    state.set("clarifications", clar)
+
+    try:
+        new_research = stage_research(result, state, options, force=True, search=False)
+        new_blueprint = stage_blueprint(new_research, state, result, options, force=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("backflow research rerun failed", platform=platform, error=str(exc))
+        return None
+
+    return _regenerate_platform(platform, new_blueprint.get("data") or {},
+                                new_research.get("data") or {}, references, options, quality_mode)
+
+
+def _backflow_blueprint(
+    platform: str,
+    critique: dict[str, Any],
+    blueprint_data: dict[str, Any],
+    research_data: dict[str, Any],
+    references: list[str] | None,
+    options: dict[str, Any],
+    quality_mode: str,
+) -> dict[str, Any] | None:
+    """Apply suggested edits to the blueprint, then re-run this platform."""
+    edits = _collect_suggested_edits(critique)
+    if not edits:
+        return None
+    try:
+        new_blueprint = edit_blueprint({"data": blueprint_data}, edits)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("backflow edit_blueprint failed", platform=platform, error=str(exc))
+        return None
+    return _regenerate_platform(platform, new_blueprint.get("data") or {},
+                                research_data, references, options, quality_mode)
+
+
+def _regenerate_platform(
+    platform: str,
+    blueprint_data: dict[str, Any],
+    research_data: dict[str, Any],
+    references: list[str] | None,
+    options: dict[str, Any],
+    quality_mode: str,
+) -> dict[str, Any] | None:
+    """Re-run a single platform's produce with fresh blueprint/research data.
+
+    Uses balanced quality (no critic) so the regeneration itself doesn't
+    recurse into another backflow — the caller does the final critic pass.
+    """
+    try:
+        _, content = _generate_single_platform(
+            platform, blueprint_data, research_data, options,
+            quality_mode=QUALITY_BALANCED, references=references,
+        )
+        return content
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("backflow regenerate failed", platform=platform, error=str(exc))
+        return None
 
 
 def _critic_platform(
@@ -802,6 +1007,14 @@ def _critic_platform(
     "engagement": 1-5,
     "alignment": 1-5
   }},
+  "classified_issues": [
+    {{
+      "type": "fact_insufficient|structure_issue|expression_weak",
+      "description": "具体问题描述",
+      "suggested_edit": {{"_selectVariant": {{"hook-main": 1}}}} or null
+    }}
+  ],
+  "primary_problem_type": "fact_insufficient|structure_issue|expression_weak|none",
   "issues": ["具体问题1：哪里偏离了事实/开头不够抓人/不像平台原生", "..."],
   "improvements": ["对应改进建议1", "..."]
 }}
@@ -809,7 +1022,15 @@ def _critic_platform(
 三轴定义：
 - fidelity（事实保真）：内容是否可核验、是否包含研究关键事实、有无编造
 - engagement（吸引力）：开头3秒是否抓人、是否有具体场景/数字、是否避免模板腔
-- alignment（平台原生感）：是否符合平台风格/结构/长度、是否像广告感而非真实分享"""
+- alignment（平台原生感）：是否符合平台风格/结构/长度、是否像广告感而非真实分享
+
+问题分类：
+- fact_insufficient：事实不足/编造 → 需要回 research 补证据
+- structure_issue：结构/顺序/变体选择不对 → 需要回 blueprint 调结构（suggested_edit 给出 edit_blueprint 格式的编辑，如 _selectVariant/_setStructure/_reorder）
+- expression_weak：表达/语气/用词不佳 → 只需重写 produce
+- none：无明显问题
+
+primary_problem_type 选最严重的一类。suggested_edit 仅 structure_issue 时给，其他填 null。"""
 
     try:
         response = dispatch_chat(
@@ -821,12 +1042,28 @@ def _critic_platform(
     except Exception as exc:  # noqa: BLE001 — critic failure must not break generation
         logger.warning("critic failed", platform=platform, error=str(exc))
         return {"scores": {}, "issues": [], "improvements": [], "total": 0,
-                "should_rewrite": False, "error": str(exc)}
+                "should_rewrite": False, "primary_problem_type": "expression_weak",
+                "classified_issues": [], "error": str(exc)}
 
     scores = critique.get("scores", {}) or {}
     total = sum(int(scores.get(k, 0) or 0) for k in ("fidelity", "engagement", "alignment"))
     critique["total"] = total
     critique["should_rewrite"] = any(int(scores.get(k, 0) or 0) < 3 for k in ("fidelity", "engagement", "alignment")) or total < 10
+
+    # Tolerate older critic outputs that lack classified_issues: degrade to
+    # expression_weak so existing behavior (rewrite produce only) is preserved.
+    classified = critique.get("classified_issues")
+    if not isinstance(classified, list) or not classified:
+        critique["classified_issues"] = []
+    primary = critique.get("primary_problem_type")
+    if primary not in ("fact_insufficient", "structure_issue", "expression_weak", "none"):
+        # Conservative degradation: when the critic didn't emit a structured
+        # primary_problem_type (older outputs / partial JSON), stay on
+        # expression_weak so we only rewrite produce — never trigger an
+        # upstream backflow on ambiguous signal. This preserves existing
+        # rewrite-only behavior.
+        primary = "expression_weak"
+    critique["primary_problem_type"] = primary
     return critique
 
 
@@ -867,22 +1104,28 @@ def stage_produce(
     platforms: list[str] | None = None,
     parallel: bool = True,
     quality_mode: str | None = None,
+    result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Produce stage: Generate platform-native content.
 
     Supports parallel generation for multiple platforms. ``quality_mode``
     (fast/balanced/polished) controls enrichment; a mode change bypasses cache.
+    ``result`` (the original analyze_target output) enables polished-mode
+    backflow to re-run research when the critic flags fact insufficiency.
     """
     quality_mode = quality_mode or _resolve_quality_mode(options)
 
-    # Cache: hit only when the stored quality_mode matches the requested one.
+    # Cache: hit only when the stored quality_mode matches AND no upstream
+    # stage was regenerated since this produce was built.
     if not force and state.has("produce"):
         cached = state.get("produce")
         cached_mode = (cached.get("_meta") or {}).get("quality_mode", QUALITY_FAST)
-        if cached_mode == quality_mode:
+        stale = (state.is_stale("produce", "research")
+                 or state.is_stale("produce", "blueprint"))
+        if cached_mode == quality_mode and not stale:
             logger.info("using cached produce stage")
             return cached
-        logger.info("quality_mode changed, regenerating produce", cached=cached_mode, requested=quality_mode)
+        logger.info("regenerating produce", cached_mode=cached_mode, requested=quality_mode, stale=stale)
 
     research_data = research.get("data", {})
     blueprint_data = blueprint.get("data", {})
@@ -909,6 +1152,10 @@ def stage_produce(
                     options or {},
                     quality_mode,
                     references,
+                    state=state,
+                    result=result,
+                    full_research=research,
+                    full_blueprint=blueprint,
                 ): platform
                 for platform in target_platforms
             }
@@ -927,6 +1174,8 @@ def stage_produce(
             _, content = _generate_single_platform(
                 platform, blueprint_data, research_data, options or {},
                 quality_mode, references,
+                state=state, result=result,
+                full_research=research, full_blueprint=blueprint,
             )
             results[platform] = content
 
@@ -936,6 +1185,10 @@ def stage_produce(
         "timestamp": time.time(),
         "platforms": list(results.keys()),
         "_meta": {"quality_mode": quality_mode},
+        "_upstream": {
+            "research": research.get("timestamp") if isinstance(research, dict) else None,
+            "blueprint": blueprint.get("timestamp") if isinstance(blueprint, dict) else None,
+        },
     }
 
     state.set("produce", output)
@@ -1043,6 +1296,7 @@ def run_pipeline(
         state,
         options,
         parallel=True,
+        result=result,
     )
 
     return outputs

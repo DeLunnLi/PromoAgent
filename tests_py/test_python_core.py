@@ -969,6 +969,239 @@ class PythonCoreTest(unittest.TestCase):
         self.assertLess(user.find("AAA"), user.find("CCC"))
 
     # ------------------------------------------------------------------
+    # Pipeline: cross-stage backflow (cascade invalidation + critic routing)
+    # ------------------------------------------------------------------
+
+    def test_is_stale_detects_upstream_change(self):
+        """blueprint cache is stale after research is regenerated."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("stale-test", cache_dir=Path(tmp))
+            # Simulate research + blueprint built together.
+            state.set("research", {"timestamp": 1000.0, "data": {}})
+            state.set("blueprint", {"timestamp": 1001.0, "data": {},
+                                    "_upstream": {"research": 1000.0}})
+            self.assertFalse(state.is_stale("blueprint", "research"))
+            # Regenerate research → blueprint now stale.
+            state.set("research", {"timestamp": 2000.0, "data": {}})
+            self.assertTrue(state.is_stale("blueprint", "research"))
+
+    def test_is_stale_no_upstream_field_returns_false(self):
+        """Old caches without _upstream tolerate (no forced recompute)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("stale-old", cache_dir=Path(tmp))
+            state.set("research", {"timestamp": 1000.0, "data": {}})
+            state.set("blueprint", {"timestamp": 1001.0, "data": {}})  # no _upstream
+            self.assertFalse(state.is_stale("blueprint", "research"))
+
+    def test_critic_returns_classified_issues(self):
+        """critic propagates classified_issues + primary_problem_type from the model."""
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            if call_count["n"] == 1:  # generate
+                return json.dumps({"markdown": "内容"}, ensure_ascii=False)
+            # critic
+            return json.dumps({
+                "scores": {"fidelity": 2, "engagement": 4, "alignment": 4},
+                "classified_issues": [{"type": "fact_insufficient",
+                                       "description": "缺数据", "suggested_edit": None}],
+                "primary_problem_type": "fact_insufficient",
+                "issues": ["缺数据"], "improvements": ["补数据"],
+            }, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("critic-classified", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False)
+        meta = out["data"]["xiaohongshu"].get("_meta", {})
+        self.assertEqual(meta["critique"]["primary_problem_type"], "fact_insufficient")
+
+    def test_critic_missing_classified_degrades_to_expression_weak(self):
+        """No classified_issues → expression_weak (preserves rewrite-only behavior)."""
+        from promoagent.pipeline import _critic_platform
+        captured = {}
+
+        def fake_dispatch(m, c):
+            captured["resp"] = m[-1]["content"]
+            # Old-style critic output: no classified_issues / primary_problem_type.
+            return json.dumps({"scores": {"fidelity": 2, "engagement": 2, "alignment": 3},
+                               "issues": ["x"], "improvements": ["y"]}, ensure_ascii=False)
+
+        with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+            critique = _critic_platform("xiaohongshu", {"markdown": "x"},
+                                        {"facts": {}}, {"style": "s", "tone": "t"},
+                                        {"api_key": "k"})
+        self.assertEqual(critique["primary_problem_type"], "expression_weak")
+
+    def test_backflow_expression_weak_uses_rewrite(self):
+        """expression_weak → produce-only rewrite, no upstream rerun."""
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            if call_count["n"] == 1:  # generate
+                return json.dumps({"markdown": "弱内容"}, ensure_ascii=False)
+            if call_count["n"] == 2:  # critic
+                return json.dumps({
+                    "scores": {"fidelity": 4, "engagement": 2, "alignment": 4},
+                    "classified_issues": [{"type": "expression_weak", "description": "开头弱"}],
+                    "primary_problem_type": "expression_weak",
+                    "issues": ["开头弱"], "improvements": ["改开头"],
+                }, ensure_ascii=False)
+            return json.dumps({"markdown": "改后内容"}, ensure_ascii=False)  # rewrite
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("backflow-expr", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False)
+        # generate + critic + rewrite = 3 calls; no research rerun.
+        self.assertEqual(call_count["n"], 3)
+        meta = out["data"]["xiaohongshu"]["_meta"]
+        self.assertTrue(meta["rewritten"])
+        self.assertIsNone(meta["backflow"])
+
+    def test_backflow_structure_issue_calls_edit_blueprint(self):
+        """structure_issue → edit_blueprint applied + platform regenerated."""
+        blueprint = {"data": {
+            "positioning": {"one_liner": "L"},
+            "elements": [
+                {"id": "hook-main", "label": "Hook", "content": "旧钩子", "variants": ["v1", "v2", "v3"]},
+                {"id": "cta-main", "label": "CTA", "content": "行动"},
+            ],
+            "structure": {"recommended_order": ["hook-main", "cta-main"]},
+        }}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            if call_count["n"] == 1:  # generate
+                return json.dumps({"markdown": "内容"}, ensure_ascii=False)
+            if call_count["n"] == 2:  # critic
+                return json.dumps({
+                    "scores": {"fidelity": 4, "engagement": 4, "alignment": 2},
+                    "classified_issues": [{"type": "structure_issue", "description": "钩子不对",
+                                           "suggested_edit": {"_selectVariant": {"hook-main": 1}}}],
+                    "primary_problem_type": "structure_issue",
+                    "issues": ["钩子不对"], "improvements": ["用变体2"],
+                }, ensure_ascii=False)
+            if call_count["n"] == 3:  # regenerate platform (balanced, no critic)
+                return json.dumps({"markdown": "用v2后内容"}, ensure_ascii=False)
+            # call 4: final critic
+            return json.dumps({"scores": {"fidelity": 5, "engagement": 5, "alignment": 5},
+                               "issues": [], "improvements": []}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("backflow-struct", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False)
+        meta = out["data"]["xiaohongshu"]["_meta"]
+        self.assertIsNotNone(meta["backflow"])
+        self.assertEqual(meta["backflow"]["stage"], "blueprint")
+        self.assertEqual(meta["backflow"]["pre_backflow_score"], 10)
+        self.assertEqual(call_count["n"], 4)
+
+    def test_backflow_fact_insufficient_reruns_research(self):
+        """fact_insufficient (with state+result) → research+blueprint rerun → platform regenerated."""
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            user = m[-1]["content"] if m else ""
+            # critic — check first; its prompt contains "平台规格" too.
+            if "评审以下" in user or "待评内容" in user:
+                return json.dumps({
+                    "scores": {"fidelity": 2, "engagement": 4, "alignment": 4},
+                    "classified_issues": [{"type": "fact_insufficient", "description": "缺数据"}],
+                    "primary_problem_type": "fact_insufficient",
+                    "issues": ["缺数据"], "improvements": ["补数据"],
+                }, ensure_ascii=False)
+            # produce (generate or regenerate)
+            if "转换为" in user or "平台规格" in user:
+                return json.dumps({"markdown": f"内容{call_count['n']}"}, ensure_ascii=False)
+            # research rerun (contains "推广策略")
+            if "推广策略" in user or "research" in user.lower():
+                return json.dumps({"facts": {"core_claim": "补充后主张", "key_facts": ["新事实"], "gaps": []},
+                                   "strategy": {"recommended_platforms": ["xiaohongshu"],
+                                                "positioning": {"one_liner": "L", "promise": "p", "differentiator": "d"},
+                                                "creative_direction": {"main_hook": "h", "hook_variants": [], "tone": "t", "key_message": "m"}}},
+                                  ensure_ascii=False)
+            if "内容元素" in user or "Blueprint" in user:  # blueprint rerun
+                return json.dumps({"version": "2.0", "elements": [{"id": "hook", "label": "Hook", "content": "新钩子"}],
+                                   "positioning": {"one_liner": "L"}, "structure": {}, "metrics": {}}, ensure_ascii=False)
+            return json.dumps({"markdown": "fallback"})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("backflow-fact", cache_dir=Path(tmp))
+            state.set("research", research)  # so stage_produce sees existing research
+            state.set("blueprint", blueprint)
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch), \
+                 patch.object(pipeline, "find_examples", lambda r, **kw: []):
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False,
+                                    result=result)
+        meta = out["data"]["xiaohongshu"]["_meta"]
+        self.assertEqual(meta["backflow"]["stage"], "research")
+        self.assertGreater(call_count["n"], 4, "fact_insufficient should trigger research+blueprint+produce rerun")
+
+    def test_backflow_no_recursion(self):
+        """After a backflow, a second low-score critic does NOT trigger another backflow."""
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        call_count = {"n": 0}
+
+        def fake_dispatch(m, c):
+            call_count["n"] += 1
+            if call_count["n"] == 1:  # generate
+                return json.dumps({"markdown": "x"}, ensure_ascii=False)
+            if call_count["n"] == 2:  # first critic → structure_issue
+                return json.dumps({
+                    "scores": {"fidelity": 4, "engagement": 4, "alignment": 2},
+                    "classified_issues": [{"type": "structure_issue", "description": "结构",
+                                           "suggested_edit": {"_selectVariant": {"hook": 0}}}],
+                    "primary_problem_type": "structure_issue",
+                    "issues": ["结构"], "improvements": ["调"],
+                }, ensure_ascii=False)
+            if call_count["n"] == 3:  # regenerate
+                return json.dumps({"markdown": "regen"}, ensure_ascii=False)
+            # call 4: final critic — still low, but must NOT trigger another backflow.
+            return json.dumps({
+                "scores": {"fidelity": 4, "engagement": 4, "alignment": 2},
+                "classified_issues": [{"type": "structure_issue", "description": "仍差"}],
+                "primary_problem_type": "structure_issue",
+                "issues": ["仍差"], "improvements": ["再调"],
+            }, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("backflow-norecurse", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                out = stage_produce(blueprint, research, state,
+                                    options={"api_key": "k", "quality_mode": "polished"},
+                                    platforms=["xiaohongshu"], parallel=False)
+        # generate + critic + regen + final_critique = 4 calls (no 2nd backflow).
+        self.assertEqual(call_count["n"], 4)
+        self.assertEqual(out["data"]["xiaohongshu"]["_meta"]["backflow"]["stage"], "blueprint")
+
+    # ------------------------------------------------------------------
     # Pipeline: run_pipeline
     # ------------------------------------------------------------------
 
