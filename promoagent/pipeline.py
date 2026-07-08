@@ -63,6 +63,27 @@ def _build_facts_block(research_data: dict[str, Any]) -> str:
     return "\n\n".join(parts) if parts else ""
 
 
+def _build_context_blocks(state: "PipelineState", *, clarifications_intro: str) -> tuple[str, str]:
+    """Build the (references, clarifications) prompt blocks shared by research
+    and blueprint stages.
+
+    ``clarifications_intro`` is the stage-specific lead-in line — research
+    frames them as "fact requirements to cover", blueprint as "user-supplied
+    facts to honor". Returns empty strings when the underlying state is absent.
+    """
+    refs = state.get("references")
+    references_block = format_examples_for_prompt(refs["examples"]) if refs and refs.get("examples") else ""
+
+    clarifications_block = ""
+    clar = state.get("clarifications")
+    if clar and clar.get("answers"):
+        lines = [f"- {q}: {a}" for q, a in clar["answers"].items() if a]
+        if lines:
+            clarifications_block = f"{clarifications_intro}\n" + "\n".join(lines)
+
+    return references_block, clarifications_block
+
+
 # Cap and flatten text sourced from LLM output before injecting it back into a
 # prompt (e.g. critic descriptions written into research clarifications). This
 # limits prompt-injection blast radius — a malicious description can't smuggle
@@ -366,12 +387,9 @@ def stage_research(
     # Clarifications: user answers from --interactive gaps prompting, OR
     # fact-gap feedback written by a produce-stage backflow. Either way, the
     # research stage should treat them as "please cover these" hints.
-    clarifications_block = ""
-    clar = state.get("clarifications")
-    if clar and clar.get("answers"):
-        lines = [f"- {q}: {a}" for q, a in clar["answers"].items() if a]
-        if lines:
-            clarifications_block = "用户/评审补充的事实要求（请重点补充这些信息，缺失则记入 gaps）：\n" + "\n".join(lines)
+    _, clarifications_block = _build_context_blocks(
+        state, clarifications_intro="用户/评审补充的事实要求（请重点补充这些信息，缺失则记入 gaps）"
+    )
 
     # Build concise source summary
     source_summary = {
@@ -574,16 +592,9 @@ def stage_blueprint(
 输出严格 JSON。"""
 
     # Optional context blocks: reference ads + user clarifications.
-    references_block = ""
-    refs = state.get("references")
-    if refs and refs.get("examples"):
-        references_block = format_examples_for_prompt(refs["examples"])
-
-    clarifications_block = ""
-    clar = state.get("clarifications")
-    if clar and clar.get("answers"):
-        lines = [f"- 问题: {q}\n  补充: {a}" for q, a in clar["answers"].items()]
-        clarifications_block = "用户补充信息（请优先纳入这些事实，不要与来源冲突时忽略参考示例）：\n" + "\n".join(lines)
+    references_block, clarifications_block = _build_context_blocks(
+        state, clarifications_intro="用户补充信息（请优先纳入这些事实，不要与来源冲突时忽略参考示例）"
+    )
 
     context_blocks = "\n\n".join(b for b in (references_block, clarifications_block) if b)
     context_section = f"\n{context_blocks}\n" if context_blocks else ""
@@ -694,93 +705,89 @@ def edit_blueprint(
     - {"_setStructure": structure_name} - Apply alternative structure
     """
     data = blueprint.get("data", {}).copy()
-    elements = data.get("elements", [])
-    elements_by_id = {e["id"]: e for e in elements}
-
-    # Track edit history
     if "edit_history" not in data:
         data["edit_history"] = []
 
-    # Apply content edits
+    def record(entry: dict[str, Any]) -> None:
+        entry.setdefault("timestamp", time.time())
+        data["edit_history"].append(entry)
+
+    # 1. Content edits (keys not starting with "_").
+    elements_by_id = {e["id"]: e for e in data.get("elements", [])}
     for key, value in edits.items():
         if key.startswith("_"):
-            continue  # Handle special commands below
-
+            continue
         if key in elements_by_id:
-            old_content = elements_by_id[key].get("content", "")
+            old = elements_by_id[key].get("content", "")
             elements_by_id[key]["content"] = value
             elements_by_id[key]["edited"] = True
-            data["edit_history"].append({
-                "type": "content",
-                "element_id": key,
-                "old": old_content,
-                "new": value,
-                "timestamp": time.time(),
-            })
+            record({"type": "content", "element_id": key, "old": old, "new": value})
 
-    # Handle special commands
+    # 2. Special commands — each handler re-reads data["elements"] so it sees
+    #    the effect of earlier handlers (e.g. _addElement then _reorder).
     if "_selectVariant" in edits:
-        for elem_id, variant_idx in edits["_selectVariant"].items():
-            if elem_id in elements_by_id:
-                element = elements_by_id[elem_id]
-                variants = element.get("variants", [])
-                if 0 <= variant_idx < len(variants):
-                    old_content = element.get("content", "")
-                    element["content"] = variants[variant_idx]
-                    element["selected_variant"] = variant_idx
-                    data["edit_history"].append({
-                        "type": "variant_select",
-                        "element_id": elem_id,
-                        "variant_index": variant_idx,
-                        "old": old_content,
-                        "new": variants[variant_idx],
-                    })
-
+        _apply_select_variant(data, edits["_selectVariant"], record)
     if "_reorder" in edits:
-        new_order = edits["_reorder"]
-        valid_ids = set(e["id"] for e in elements)
-        if all(eid in valid_ids for eid in new_order):
-            data["elements"] = [elements_by_id[eid] for eid in new_order]
-            data["edit_history"].append({
-                "type": "reorder",
-                "new_order": new_order,
-            })
-
+        _apply_reorder(data, edits["_reorder"], record)
     if "_addElement" in edits:
-        new_elem = edits["_addElement"]
-        new_elem["id"] = new_elem.get("id", f"custom-{len(elements)}")
-        new_elem["editable"] = True
-        elements.append(new_elem)
-        data["edit_history"].append({
-            "type": "add",
-            "element": new_elem,
-        })
-
+        _apply_add_element(data, edits["_addElement"], record)
     if "_removeElement" in edits:
-        elem_id = edits["_removeElement"]
-        data["elements"] = [e for e in elements if e.get("id") != elem_id]
-        data["edit_history"].append({
-            "type": "remove",
-            "element_id": elem_id,
-        })
-
+        _apply_remove_element(data, edits["_removeElement"], record)
     if "_setStructure" in edits:
-        structure_name = edits["_setStructure"]
-        structures = data.get("structure", {}).get("alternative_structures", [])
-        for struct in structures:
-            if struct.get("name") == structure_name:
-                order = struct.get("order", [])
-                valid_ids = set(e["id"] for e in elements)
-                if all(eid in valid_ids for eid in order):
-                    data["elements"] = [elements_by_id[eid] for eid in order if eid in elements_by_id]
-                    data["edit_history"].append({
-                        "type": "structure_change",
-                        "structure": structure_name,
-                    })
-                break
+        _apply_set_structure(data, edits["_setStructure"], record)
 
     blueprint["data"] = data
     return blueprint
+
+
+def _apply_select_variant(data: dict, selections: dict, record) -> None:
+    by_id = {e["id"]: e for e in data.get("elements", [])}
+    for elem_id, idx in selections.items():
+        element = by_id.get(elem_id)
+        if element is None:
+            continue
+        variants = element.get("variants", [])
+        if 0 <= idx < len(variants):
+            old = element.get("content", "")
+            element["content"] = variants[idx]
+            element["selected_variant"] = idx
+            record({"type": "variant_select", "element_id": elem_id,
+                    "variant_index": idx, "old": old, "new": variants[idx]})
+
+
+def _apply_reorder(data: dict, new_order: list, record) -> None:
+    by_id = {e["id"]: e for e in data.get("elements", [])}
+    valid_ids = set(by_id)
+    if all(eid in valid_ids for eid in new_order):
+        data["elements"] = [by_id[eid] for eid in new_order]
+        record({"type": "reorder", "new_order": new_order})
+
+
+def _apply_add_element(data: dict, new_elem: dict, record) -> None:
+    elements = data.get("elements", [])
+    new_elem["id"] = new_elem.get("id", f"custom-{len(elements)}")
+    new_elem["editable"] = True
+    elements.append(new_elem)
+    data["elements"] = elements  # ensure key exists / stays in sync
+    record({"type": "add", "element": new_elem})
+
+
+def _apply_remove_element(data: dict, elem_id: str, record) -> None:
+    data["elements"] = [e for e in data.get("elements", []) if e.get("id") != elem_id]
+    record({"type": "remove", "element_id": elem_id})
+
+
+def _apply_set_structure(data: dict, structure_name: str, record) -> None:
+    structures = data.get("structure", {}).get("alternative_structures", [])
+    by_id = {e["id"]: e for e in data.get("elements", [])}
+    for struct in structures:
+        if struct.get("name") != structure_name:
+            continue
+        order = struct.get("order", [])
+        if all(eid in by_id for eid in order):
+            data["elements"] = [by_id[eid] for eid in order]
+            record({"type": "structure_change", "structure": structure_name})
+        break
 
 
 def preview_blueprint(blueprint: dict[str, Any], format: str = "markdown") -> str:
