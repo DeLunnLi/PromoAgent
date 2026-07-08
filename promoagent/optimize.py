@@ -101,7 +101,7 @@ def _write_promo_files(
         if key in ("positioning", "strategy", "research", "blueprint"):
             continue
 
-        content = _extract_markdown(item)
+        content = _format_platform_content(item)
         if content:
             filename = _platform_filename(key)
             write_file(out / filename, content, generated)
@@ -111,7 +111,7 @@ def _write_promo_files(
     if not platforms_written:
         promotions = ai_content.get("promotions") or {}
         for key, item in promotions.items():
-            content = _extract_markdown(item)
+            content = _format_platform_content(item)
             if content:
                 filename = _platform_filename(key)
                 write_file(out / filename, content, generated)
@@ -132,12 +132,45 @@ def write_file(path: Path, content: str, manifest: list[str]) -> None:
     manifest.append(path.name)
 
 
-def _extract_markdown(item: Any) -> str:
+def _format_platform_content(item: Any) -> str:
+    """Render a platform's produce output into a full markdown file.
+
+    Surfaces title / hashtags / thread / publish_notes alongside the markdown
+    body — previously these fields were generated but discarded, wasting the
+    model's output (notably Twitter threads and per-platform publish advice).
+    """
     if isinstance(item, str):
         return item.strip()
-    if isinstance(item, dict):
-        return str(item.get("markdown") or "").strip()
-    return ""
+    if not isinstance(item, dict):
+        return ""
+
+    parts: list[str] = []
+    title = str(item.get("title") or "").strip()
+    if title:
+        parts.append(f"# {title}")
+
+    # Twitter/X threads: render as a numbered thread block.
+    thread = item.get("thread") or []
+    if isinstance(thread, list) and thread:
+        parts.append("\n".join(f"{i+1}/ {t}" for i, t in enumerate(thread) if t))
+    else:
+        body = str(item.get("markdown") or "").strip()
+        if body:
+            parts.append(body)
+
+    hashtags = item.get("hashtags") or []
+    if isinstance(hashtags, list) and hashtags:
+        parts.append(" ".join(h for h in hashtags if h))
+
+    notes = str(item.get("publish_notes") or "").strip()
+    if notes:
+        parts.append(f"\n> 📌 {notes}")
+
+    return "\n\n".join(p for p in parts if p).strip()
+
+
+# Back-compat alias for any external caller expecting the old name.
+_extract_markdown = _format_platform_content
 
 
 def _evidence_summary(project: dict[str, Any], evidence: dict[str, Any]) -> str:

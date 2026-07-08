@@ -180,17 +180,33 @@ def print_promo_result(content: dict[str, Any]) -> None:
         console.print(f"\n[bold cyan]📱 Generated Content for {len(promotions)} Platforms:[/]\n")
 
         for platform, item in promotions.items():
-            md = item.get("markdown", "") if isinstance(item, dict) else str(item)
-            notes = item.get("publishNotes", "") if isinstance(item, dict) else ""
+            if isinstance(item, dict):
+                title = item.get("title", "")
+                md = item.get("markdown", "")
+                thread = item.get("thread", []) or []
+                hashtags = item.get("hashtags", []) or []
+                notes = item.get("publish_notes", "") or item.get("publishNotes", "")
+            else:
+                title, md, thread, hashtags, notes = "", str(item), [], [], ""
 
-            panel_content = md[:500] + "..." if len(md) > 500 else md
+            # Build a preview that surfaces thread / hashtags / notes, not just markdown.
+            preview_parts: list[str] = []
+            if title:
+                preview_parts.append(f"[bold]{title}[/]")
+            if thread:
+                preview_parts.append("\n".join(f"{i+1}/ {t}" for i, t in enumerate(thread) if t))
+            elif md:
+                preview_parts.append(md[:500] + ("..." if len(md) > 500 else ""))
+            if hashtags:
+                preview_parts.append("[dim]" + " ".join(hashtags) + "[/]")
+            panel_content = "\n\n".join(preview_parts) if preview_parts else "(empty)"
 
             console.print(Panel(
                 panel_content,
                 title=f"[bold]{platform.upper()}[/]",
                 border_style="green" if platform in ["xiaohongshu", "xhs"] else "blue",
                 box=box.ROUNDED,
-                subtitle=f"[dim]{notes}" if notes else None,
+                subtitle=f"[dim]📌 {notes}" if notes else None,
             ))
 
 

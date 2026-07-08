@@ -471,6 +471,33 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("参考广告/示例", captured["user_prompt"])
         self.assertIn("这是参考广告内容", captured["user_prompt"])
 
+    def test_stage_research_injects_raw_evidence(self):
+        """research prompt surfaces proof_points / key_actions / headings from the analyzer."""
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        # Inject extra evidence fields to verify they reach the prompt.
+        result["evidence"]["proofPoints"] = ["支持 X 的数据", "Y 案例"]
+        result["evidence"]["keyActions"] = ["npm install", "运行 init"]
+        result["evidence"]["headings"] = [
+            {"level": 2, "text": "Features"}, {"level": 2, "text": "Install"},
+        ]
+        captured = {}
+
+        def fake_dispatch(messages, config):
+            captured["user_prompt"] = messages[-1]["content"]
+            return json.dumps(_research_payload(), ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("research-evidence", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch), \
+                 patch.object(pipeline, "find_examples", lambda r, **kw: []):
+                stage_research(result, state, options={"api_key": "k"})
+        # The source_summary JSON in the prompt must carry the raw evidence.
+        self.assertIn("proof_points", captured["user_prompt"])
+        self.assertIn("支持 X 的数据", captured["user_prompt"])
+        self.assertIn("key_actions", captured["user_prompt"])
+        self.assertIn("npm install", captured["user_prompt"])
+        self.assertIn("Features", captured["user_prompt"])
+
     def test_stage_research_no_search_skips_find(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
         find_calls = []
@@ -881,6 +908,66 @@ class PythonCoreTest(unittest.TestCase):
                               platforms=["twitter"], parallel=False)
         self.assertEqual(len(calls), 2, "mode change must bypass cache")
 
+    def test_produce_respects_blueprint_structure_order(self):
+        """produce orders elements by blueprint.structure.recommended_order."""
+        blueprint = {"data": {
+            "positioning": {"one_liner": "L"},
+            "elements": [
+                {"id": "hook", "label": "Hook", "content": "钩子"},
+                {"id": "solution", "label": "Solution", "content": "方案"},
+                {"id": "cta", "label": "CTA", "content": "行动"},
+            ],
+            "structure": {"recommended_order": ["cta", "hook", "solution"]},
+        }}
+        research = {"data": {"facts": {}}}
+        captured = {}
+
+        def fake_dispatch(m, c):
+            captured["user"] = m[-1]["content"]
+            return json.dumps({"markdown": "x"}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("produce-order", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                stage_produce(blueprint, research, state,
+                              options={"api_key": "k", "quality_mode": "fast"},
+                              platforms=["xiaohongshu"], parallel=False)
+        # Elements text in the prompt must follow the reordered sequence.
+        user = captured["user"]
+        cta_pos = user.find("行动")
+        hook_pos = user.find("钩子")
+        sol_pos = user.find("方案")
+        self.assertLess(cta_pos, hook_pos, "cta should come before hook")
+        self.assertLess(hook_pos, sol_pos, "hook should come before solution")
+
+    def test_produce_appends_unordered_elements(self):
+        """Elements not in recommended_order are appended at the end."""
+        blueprint = {"data": {
+            "positioning": {"one_liner": "L"},
+            "elements": [
+                {"id": "a", "label": "A", "content": "AAA"},
+                {"id": "b", "label": "B", "content": "BBB"},
+                {"id": "c", "label": "C", "content": "CCC"},  # not in order
+            ],
+            "structure": {"recommended_order": ["b", "a"]},
+        }}
+        research = {"data": {"facts": {}}}
+        captured = {}
+
+        def fake_dispatch(m, c):
+            captured["user"] = m[-1]["content"]
+            return json.dumps({"markdown": "x"}, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("produce-append", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch):
+                stage_produce(blueprint, research, state,
+                              options={"api_key": "k", "quality_mode": "fast"},
+                              platforms=["xiaohongshu"], parallel=False)
+        user = captured["user"]
+        self.assertLess(user.find("BBB"), user.find("AAA"))
+        self.assertLess(user.find("AAA"), user.find("CCC"))
+
     # ------------------------------------------------------------------
     # Pipeline: run_pipeline
     # ------------------------------------------------------------------
@@ -945,6 +1032,56 @@ class PythonCoreTest(unittest.TestCase):
             self.assertEqual(manifest["promoModel"], "test-model")
             xhs = (output_dir / "promo-xiaohongshu.md").read_text(encoding="utf-8")
             self.assertIn("AI 小红书正文", xhs)
+
+    def test_optimize_surfaces_full_platform_fields(self):
+        """title / hashtags / thread / publish_notes are written to files, not just markdown."""
+        from promoagent.optimize import _format_platform_content
+        rendered = _format_platform_content({
+            "title": "测试标题",
+            "markdown": "正文内容",
+            "hashtags": ["#foo", "#bar"],
+            "thread": ["第一推", "第二推"],
+            "publish_notes": "建议晚上发",
+        })
+        self.assertIn("# 测试标题", rendered)
+        self.assertIn("1/ 第一推", rendered)
+        self.assertIn("2/ 第二推", rendered)
+        self.assertIn("#foo #bar", rendered)
+        self.assertIn("📌 建议晚上发", rendered)
+
+    def test_optimize_twitter_thread_rendered(self):
+        """Twitter threads are rendered as numbered posts, not dropped."""
+        from promoagent.optimize import _format_platform_content
+        rendered = _format_platform_content({
+            "platform": "twitter",
+            "thread": ["钩子推文", "价值点", "CTA"],
+            "hashtags": [],
+            "publish_notes": "",
+        })
+        self.assertIn("1/ 钩子推文", rendered)
+        self.assertIn("3/ CTA", rendered)
+        # No markdown body when thread is present — thread replaces it.
+        self.assertNotIn("markdown", rendered.lower())
+
+    def test_optimize_runs_with_full_fields(self):
+        """run_optimize writes the enriched content to the platform file."""
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        ai_content = {"twitter": {
+            "title": "Show HN: Repo Pulse",
+            "markdown": "正文",
+            "hashtags": ["#showhn"],
+            "thread": ["推文1", "推文2"],
+            "publish_notes": "首发后转发",
+        }}
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "launch-assets"
+            run_optimize(result, cwd=FIXTURES, output_dir=output_dir,
+                         ai_content=ai_content, ai_model="test-model")
+            tw = (output_dir / "promo-twitter.md").read_text(encoding="utf-8")
+        self.assertIn("Show HN: Repo Pulse", tw)
+        self.assertIn("1/ 推文1", tw)
+        self.assertIn("#showhn", tw)
+        self.assertIn("首发后转发", tw)
 
     def test_optimize_with_images_false_skips_image_generation(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)

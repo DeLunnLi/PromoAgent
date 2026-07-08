@@ -195,8 +195,13 @@ def stage_research(
         "description": project.get("description", ""),
         "topics": project.get("topics", []),
         "source_type": result.get("source", ""),
-        "readme_opening": evidence.get("readmeOpening", "")[:400],
+        "readme_opening": (evidence.get("readmeOpening") or evidence.get("opening") or "")[:400],
+        "first_screen": (evidence.get("firstScreen") or "")[:400],
         "key_features": evidence.get("keyFeatures", [])[:5],
+        "key_actions": [a for a in (evidence.get("keyActions") or [])[:5] if a],
+        "proof_points": [p for p in (evidence.get("proofPoints") or [])[:5] if p],
+        "headings": [h.get("text", "") for h in (evidence.get("headings") or [])[:6]
+                     if isinstance(h, dict) and h.get("text")],
         "target_audience": evidence.get("targetAudience", []),
     }
 
@@ -241,6 +246,7 @@ def stage_research(
 
 要求：
 - 所有信息必须基于来源材料
+- key_facts 优先使用 proof_points 和 key_actions 中的可核验事实（带数字/场景/具体动作）
 - 明确标记无法验证的内容
 - 策略要具体可执行，避免空泛"""
 
@@ -663,9 +669,21 @@ def _generate_single_platform(
 
     spec = to_prompt_dict(spec_obj)
 
+    # Order elements by the blueprint's recommended_order when present, so that
+    # user edits to structure (reorder / setStructure) actually affect the
+    # produced content instead of being cosmetic metadata.
+    elements = list(blueprint_data.get("elements", []))
+    order = (blueprint_data.get("structure") or {}).get("recommended_order") or []
+    if order:
+        by_id = {e.get("id"): e for e in elements if isinstance(e, dict)}
+        ordered = [by_id[eid] for eid in order if eid in by_id]
+        # Append any elements not listed in the order (e.g. added via _addElement).
+        ordered.extend(e for e in elements if e.get("id") not in set(order))
+        elements = ordered or elements
+
     elements_text = "\n\n".join([
         f"[{e.get('label', e.get('type'))}]\n{e.get('content', '')}"
-        for e in blueprint_data.get("elements", [])
+        for e in elements if isinstance(e, dict)
     ])
 
     # --- Enrichment blocks (all modes get facts; balanced+ get more) ---
@@ -708,6 +726,7 @@ def _generate_single_platform(
 
 要求：
 - 严格遵循平台风格和字数限制
+- 按内容元素的给定顺序组织正文（这是用户编辑后的结构，不要自行重排）
 - 基于 Blueprint 元素和研究事实，不要添加未提及的信息
 - markdown 正文必须包含「关键事实」中至少 2 条可核验信息，不要泛泛而谈
 - hashtags 要符合平台习惯"""
