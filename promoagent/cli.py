@@ -85,11 +85,8 @@ def _build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--dry-run", action="store_true", help="Preview only.")
     publish.add_argument("--list", action="store_true", help="List configured publishers.")
 
-    # serve
-    serve = sub.add_parser("serve", help="Launch web interface.")
-    serve.add_argument("--host", default="127.0.0.1", help="Host to bind.")
-    serve.add_argument("--port", type=int, default=7860, help="Port.")
-    serve.add_argument("--share", action="store_true", help="Create public link.")
+    # serve — launches the MCP server (stdio) for AI tool integration.
+    sub.add_parser("serve", help="Launch the MCP server (for Claude Desktop / Cursor).")
 
     # cache
     cache = sub.add_parser("cache", help="Manage cache.")
@@ -144,9 +141,13 @@ def _run_analyze(args: argparse.Namespace) -> int:
 
 
 def _run_serve(args: argparse.Namespace) -> int:
-    print_error("Web UI is temporarily unavailable. Use `promoagent draft` for content generation.")
-    print_info("For AI tool integration (Claude Desktop / Cursor), use the MCP server: promoagent-mcp")
-    return 1
+    """Launch the MCP server over stdio (for Claude Desktop / Cursor)."""
+    from .mcp_server import main as mcp_main
+    try:
+        mcp_main()
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 1
+    return 0
 
 
 def _run_fill(args: argparse.Namespace) -> int:

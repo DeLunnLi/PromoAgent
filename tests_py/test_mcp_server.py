@@ -85,13 +85,15 @@ class TestMcpServer(_StateIsolationMixin, unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_s2l_list_platforms_serializable(self):
-        plats = _impl_list_platforms()
-        self.assertIsInstance(plats, list)
+        out = _impl_list_platforms()
+        # Wrapped in a dict so FastMCP emits a single TextContent (not one per item).
+        self.assertIsInstance(out, dict)
+        plats = out["platforms"]
         keys = [p["key"] for p in plats]
         self.assertIn("xiaohongshu", keys)
         self.assertIn("twitter", keys)
         # Must be JSON serializable (MCP requirement).
-        json.dumps(plats)
+        json.dumps(out)
 
     def test_s2l_analyze_returns_source_id(self):
         with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp):

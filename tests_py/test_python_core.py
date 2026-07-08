@@ -860,13 +860,22 @@ class PythonCoreTest(unittest.TestCase):
         )
         self.assertIn("--no-search", result.stdout)
 
-    def test_python_cli_serve_reports_unavailable(self):
+    def test_python_cli_serve_launches_mcp_server(self):
+        """`serve` now launches the MCP server over stdio."""
+        import json as _json
         result = subprocess.run(
             [sys.executable, "-m", "promoagent", "serve"],
             cwd=ROOT, text=True, capture_output=True,
+            input=_json.dumps({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                           "clientInfo": {"name": "test", "version": "1"}},
+            }) + "\n",
+            timeout=10,
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("draft", result.stderr.lower() + result.stdout.lower())
+        # A successful initialize returns serverInfo, not an error.
+        self.assertIn("serverInfo", result.stdout)
+        self.assertIn("promoagent", result.stdout)
 
     def test_promoagent_bin_delegates_to_python_cli(self):
         result = subprocess.run(

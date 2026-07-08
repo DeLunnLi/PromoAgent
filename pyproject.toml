@@ -23,7 +23,6 @@ keywords = [
 dependencies = ["rich>=13.0"]
 
 [project.optional-dependencies]
-web    = ["gradio>=4.0"]
 fill   = ["playwright>=1.40"]
 mcp    = ["mcp>=1.0"]
 pdf    = ["pypdf>=4.0"]

@@ -120,8 +120,11 @@ def _impl_analyze(target: str) -> dict[str, Any]:
     )
 
 
-def _impl_list_platforms() -> list[dict[str, Any]]:
-    return [asdict(spec) for spec in list_platforms()]
+def _impl_list_platforms() -> dict[str, Any]:
+    # Wrap in a dict so FastMCP serializes the whole list as a single
+    # TextContent. Returning a bare list[dict] makes FastMCP emit one
+    # TextContent per element, which AI tools can't reassemble reliably.
+    return {"platforms": [asdict(spec) for spec in list_platforms()]}
 
 
 def _impl_research(target: str, search: bool = True,
@@ -318,7 +321,7 @@ def _register(mcp: "FastMCP") -> None:
         return _impl_analyze(target)
 
     @mcp.tool()
-    def s2l_list_platforms() -> list[dict]:
+    def s2l_list_platforms() -> dict:
         """List all supported platforms with their format, style, and API support flags."""
         return _impl_list_platforms()
 

@@ -43,7 +43,7 @@ promoagent draft ./CHANGELOG.md --interactive
 promoagent draft . --image --output-dir launch-assets
 ```
 
-> **Note**: `promote`/`optimize`/`refine` are deprecated. Use `draft` for better results.
+> **Note**: `promote`/`optimize`/`refine` were removed in v0.4. Use `draft` instead.
 
 ---
 
@@ -187,9 +187,6 @@ pip install -e .
 
 ### With Optional Features
 ```bash
-# Web UI
-pip install -e ".[web]"
-
 # Browser auto-fill
 pip install -e ".[fill]"
 
@@ -200,7 +197,7 @@ pip install -e ".[mcp]"
 pip install -e ".[ocr]"
 
 # Everything
-pip install -e ".[web,fill,mcp,ocr]"
+pip install -e ".[fill,mcp,ocr]"
 ```
 
 ---

@@ -109,12 +109,26 @@ promoagent draft . --stage all
 
 ## 向后兼容
 
-旧命令仍然可用，但会显示弃用警告：
+旧命令（`promote` / `optimize` / `refine`）**已在 v0.4 移除**，不再可用。直接使用 `draft`：
 
 ```bash
-$ promoagent promote . --ai
-⚠️  `promote` is deprecated. Use `promoagent draft` for better results.
+# 旧（已失效）
+promoagent promote . --ai
+promoagent optimize . --ai
+promoagent refine "改一下"
+
+# 新
+promoagent draft .
+promoagent draft . --output-dir launch-assets
+promoagent draft --resume --edit edits.json
 ```
+
+## v0.4 后续增强（0.4.x）
+
+- **主动搜索参考广告**：`draft` 在 research 阶段自动搜同品类真实帖子/广告塞进 prompt（`--no-search` 可关）。复用 `examples.find_examples`（Tavily + Exa + AI 三路）。
+- **research 缺口追问**：`--interactive` 模式下，research 跑完读取 `facts.gaps` 逐条向用户追问，答案合并进 blueprint 的 prompt。
+- **MCP server**：`promoagent serve` 或 `promoagent-mcp` 启动 stdio MCP server，暴露 9 个工具（analyze / research / blueprint / edit_blueprint / produce / draft / image_brief / build_image_prompt / list_platforms），供 Claude Desktop / Cursor 调用。`serve` 不再是 Web UI。
+- **CLI 清理**：移除 `web.py`（Gradio）、旧版 `mcp_server.py`、`interactive.py`、`promo_prompts.py`。`web` extra（gradio）已从 pyproject 删除。
 
 ## 主要改进
 
@@ -127,7 +141,7 @@ $ promoagent promote . --ai
 ## 常见问题
 
 ### Q: 旧命令会被删除吗？
-A: 短期内不会，但建议尽快迁移到 `draft`。
+A: 已经删除。`promote` / `optimize` / `refine` 在 v0.4 移除，请用 `draft`。
 
 ### Q: 如何获取之前的功能？
 A: 所有旧功能都已迁移到 `draft`，见上方命令映射表。

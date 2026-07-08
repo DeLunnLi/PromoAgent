@@ -169,7 +169,6 @@ def run_doctor() -> int:
         ("pypdf", "PDF text extraction", "pdf"),
         ("pypdfium2", "PDF rendering", "ocr"),
         ("pytesseract", "OCR for scanned PDFs", "ocr"),
-        ("gradio", "Web UI", "web"),
         ("playwright", "Browser auto-fill", "fill"),
         ("mcp", "MCP Server", "mcp"),
     ]
