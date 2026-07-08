@@ -27,6 +27,7 @@ fill   = ["playwright>=1.40"]
 mcp    = ["mcp>=1.0"]
 pdf    = ["pypdf>=4.0"]
 ocr    = ["pypdf>=4.0", "pypdfium2>=4.0", "Pillow>=9.0", "pytesseract>=0.3"]
+render = ["playwright>=1.40", "markdown>=3.5"]
 
 [project.scripts]
 promoagent     = "promoagent.cli:main"

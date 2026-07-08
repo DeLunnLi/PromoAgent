@@ -1361,17 +1361,41 @@ def generate_platform_images(
     options: dict[str, Any] | None = None,
     *,
     env: dict[str, str] | None = None,
+    produce_data: dict[str, Any] | None = None,
+    image_style: str = "auto",
 ) -> list[dict[str, Any]]:
     """Generate images from both README sources and AI (ModelScope).
 
     Returns a list of generated image metadata dicts.
     Image generation failures are logged but do not raise.
+
+    ``produce_data`` (the produce stage's platform→content mapping) enables
+    HTML card rendering via ``render_xhs`` when ``image_style`` is "card" or
+    "auto" (auto uses cards for Xiaohongshu, AI for others).
     """
     options = options or {}
     generated: list[dict[str, Any]] = []
 
     images_dir = output_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
+
+    # Source 0: HTML card rendering (deterministic, styleable) for platforms
+    # whose produce output is available. Currently Xiaohongshu only.
+    if produce_data and image_style in ("card", "auto"):
+        try:
+            from .render_xhs import render_xhs_cards
+        except ImportError:
+            render_xhs_cards = None  # type: ignore[assignment]
+        if render_xhs_cards is not None:
+            for plat_key in ("xiaohongshu", "xhs"):
+                content = produce_data.get(plat_key)
+                if isinstance(content, dict) and content.get("markdown"):
+                    try:
+                        cards = render_xhs_cards(content, images_dir)
+                        generated.extend(cards)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"promoagent: xhs card render failed: {exc}", file=sys.stderr)
+                    break  # one of the aliases is enough
 
     # Source 1: README images
     readme_imgs = fetch_readme_images(result, images_dir)

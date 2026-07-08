@@ -74,6 +74,8 @@ def _build_parser() -> argparse.ArgumentParser:
     draft.add_argument("--parallel", action="store_true", default=True, help="Parallel platform generation.")
     draft.add_argument("--platforms", help="Comma-separated list of target platforms.")
     draft.add_argument("--image", action="store_true", help="Generate cover images.")
+    draft.add_argument("--image-style", choices=["card", "photo", "auto"], default="auto",
+                       help="Image style: card (HTML card render, xhs) / photo (AI image) / auto (xhs→card, else photo).")
     draft.add_argument("--no-search", action="store_true", help="Skip reference ad search during research.")
     draft.add_argument("--quality", choices=["fast", "balanced", "polished"], default="balanced",
                        help="质量模式：fast(仅事实)/balanced(+平台知识+few-shot)/polished(+critic重写)。")
@@ -436,7 +438,11 @@ def _run_draft(args: argparse.Namespace) -> int:
                 from .image import generate_platform_images
                 try:
                     image_options = {"platforms": args.platforms} if args.platforms else {}
-                    images = generate_platform_images(result, output_path, image_options)
+                    images = generate_platform_images(
+                        result, output_path, image_options,
+                        produce_data=produce_data,
+                        image_style=getattr(args, "image_style", "auto"),
+                    )
                     if images:
                         print_success(f"Generated {len(images)} images")
                 except Exception as exc:
