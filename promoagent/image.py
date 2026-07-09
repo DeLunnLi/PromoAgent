@@ -1380,22 +1380,27 @@ def generate_platform_images(
     images_dir.mkdir(parents=True, exist_ok=True)
 
     # Source 0: HTML card rendering (deterministic, styleable) for platforms
-    # whose produce output is available. Currently Xiaohongshu only.
+    # whose produce output is available. Routes by PlatformRenderSpec so any
+    # platform with a spec (xhs/wechat/linkedin/twitter) renders cards; others
+    # fall through to AI image generation below.
     if produce_data and image_style in ("card", "auto"):
         try:
-            from .render_xhs import render_xhs_cards
+            from .render import render_platform_cards, get_spec
         except ImportError:
-            render_xhs_cards = None  # type: ignore[assignment]
-        if render_xhs_cards is not None:
-            for plat_key in ("xiaohongshu", "xhs"):
-                content = produce_data.get(plat_key)
-                if isinstance(content, dict) and content.get("markdown"):
-                    try:
-                        cards = render_xhs_cards(content, images_dir)
-                        generated.extend(cards)
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"promoagent: xhs card render failed: {exc}", file=sys.stderr)
-                    break  # one of the aliases is enough
+            render_platform_cards = None  # type: ignore[assignment]
+            get_spec = None  # type: ignore[assignment]
+        if render_platform_cards is not None and get_spec is not None:
+            for plat_key, content in produce_data.items():
+                if not isinstance(content, dict) or not content.get("markdown"):
+                    continue
+                spec = get_spec(plat_key)
+                if spec is None or spec.cards == "none":
+                    continue  # pass-through platform or unknown
+                try:
+                    cards = render_platform_cards(plat_key, content, images_dir)
+                    generated.extend(cards)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"promoagent: {plat_key} card render failed: {exc}", file=sys.stderr)
 
     # Source 1: README images
     readme_imgs = fetch_readme_images(result, images_dir)
