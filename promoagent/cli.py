@@ -86,7 +86,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # fill
     fill = sub.add_parser("fill", help="Auto-fill content in browser.")
-    fill.add_argument("platform", help="Platform to fill.")
+    fill.add_argument("platform", help="Platform to fill (or 'all' for every available).")
     fill.add_argument("--content", help="Content to fill.")
     fill.add_argument("--assets-dir", default="launch-assets", help="Assets directory.")
     fill.add_argument("--title", default="", help="Post title.")
@@ -94,12 +94,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # publish
     publish = sub.add_parser("publish", help="Publish to social platforms.")
-    publish.add_argument("platform", nargs="?", help="Platform to publish to.")
+    publish.add_argument("platform", nargs="?", help="Platform to publish to (or 'all' for every available).")
     publish.add_argument("--content", help="Content to publish.")
     publish.add_argument("--assets-dir", default="launch-assets", help="Assets directory.")
     publish.add_argument("--title", default="", help="Post title.")
     publish.add_argument("--dry-run", action="store_true", help="Preview only.")
     publish.add_argument("--list", action="store_true", help="List configured publishers.")
+    publish.add_argument("--headless", action="store_true", help="Headless browser for manual platforms (fill).")
 
     # serve — launches the MCP server (stdio) for AI tool integration.
     sub.add_parser("serve", help="Launch the MCP server (for Claude Desktop / Cursor).")
@@ -170,14 +171,30 @@ def _run_fill(args: argparse.Namespace) -> int:
     from .browser import fill_platform, list_supported_platforms
     from .publish import load_content_from_assets
 
-    try:
-        content = args.content or load_content_from_assets(args.assets_dir, args.platform)
-    except FileNotFoundError as exc:
-        print_error(f"{exc}\nTip: Run `promoagent draft . --output-dir {args.assets_dir}` first.")
-        return 1
+    raw = args.platform.lower().strip()
+    if raw == "all":
+        platforms = list_supported_platforms()
+        if not platforms:
+            print_error("No supported fill platforms found.")
+            return 1
+        print_info(f"Filling {len(platforms)} platforms: {', '.join(platforms)}")
+    else:
+        platforms = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
 
-    fill_platform(args.platform.lower().strip(), content, title=args.title, headless=args.headless)
-    return 0
+    failures = 0
+    for plat in platforms:
+        try:
+            content = args.content or load_content_from_assets(args.assets_dir, plat)
+            print_info(f"Filling {plat}...")
+            fill_platform(plat, content, title=args.title, headless=args.headless)
+            print_success(f"Done: {plat}")
+        except FileNotFoundError as exc:
+            print_error(f"{plat}: {exc}")
+            failures += 1
+        except Exception as exc:  # noqa: BLE001
+            print_error(f"{plat}: {exc}")
+            failures += 1
+    return 1 if failures else 0
 
 
 def _run_publish_cmd(args: argparse.Namespace) -> int:
@@ -185,25 +202,59 @@ def _run_publish_cmd(args: argparse.Namespace) -> int:
 
     if args.list or args.platform is None:
         pubs = available_publishers()
-        print_info(f"Configured: {', '.join(pubs) if pubs else 'None'}")
-        print_info(f"Manual platforms: {', '.join(NO_API_PLATFORMS)}")
+        print_info(f"Configured API publishers: {', '.join(pubs) if pubs else 'None'}")
+        print_info(f"Manual platforms (browser fill): {', '.join(NO_API_PLATFORMS)}")
+        print_tip("Use `promoagent publish all` to publish to every available platform.")
         return 0
 
-    platform = args.platform.lower().strip()
+    raw = args.platform.lower().strip()
 
-    try:
-        content = args.content or load_content_from_assets(args.assets_dir, platform)
-    except FileNotFoundError as exc:
-        print_error(f"{exc}\nTip: Run `promoagent draft . --output-dir {args.assets_dir}` first.")
-        return 1
+    # Determine the target platform list.
+    if raw == "all":
+        api_platforms = list(available_publishers())
+        manual_platforms = [p for p in NO_API_PLATFORMS if _has_assets_for(args.assets_dir, p)]
+        platforms = api_platforms + manual_platforms
+        if not platforms:
+            print_error("No platforms available. Configure API keys or run `promoagent draft` first.")
+            return 1
+        print_info(f"Publishing to {len(platforms)} platforms: {', '.join(platforms)}")
+    else:
+        platforms = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
 
-    if args.dry_run:
-        print_info(f"[DRY RUN] Would publish to {platform}:\n{content[:500]}{'...' if len(content) > 500 else ''}")
-        return 0
+    failures = 0
+    for plat in platforms:
+        try:
+            content = args.content or load_content_from_assets(args.assets_dir, plat)
+        except FileNotFoundError as exc:
+            print_error(f"{plat}: {exc}")
+            failures += 1
+            continue
 
-    result = publish_content(platform, content, title=args.title)
-    print(result)
-    return 0 if result.ok else 1
+        if args.dry_run:
+            print_info(f"[DRY RUN] {plat}:\n{content[:300]}{'...' if len(content) > 300 else ''}")
+            continue
+
+        # Route: API platform → publish_content; manual platform → browser fill.
+        if plat in NO_API_PLATFORMS:
+            print_info(f"{plat}: opening browser (manual platform)...")
+            from .browser import fill_platform
+            fill_platform(plat, content, title=args.title, headless=args.headless)
+            print_success(f"{plat}: browser filled")
+        else:
+            result = publish_content(plat, content, title=args.title)
+            if result.ok:
+                print_success(f"{plat}: published")
+            else:
+                print_error(f"{plat}: {result.error}")
+                failures += 1
+    return 1 if failures else 0
+
+
+def _has_assets_for(assets_dir: str, platform: str) -> bool:
+    """Quick check whether a promo file exists for this platform (no exception)."""
+    from .optimize import _platform_filename
+    from pathlib import Path
+    return (Path(assets_dir) / _platform_filename(platform)).exists()
 
 
 def _run_cache(args: argparse.Namespace) -> int:

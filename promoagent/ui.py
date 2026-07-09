@@ -209,6 +209,46 @@ def print_promo_result(content: dict[str, Any]) -> None:
                 subtitle=f"[dim]📌 {notes}" if notes else None,
             ))
 
+            # Show critic scores + backflow info when available (polished mode).
+            meta = item.get("_meta") if isinstance(item, dict) else None
+            if isinstance(meta, dict):
+                _print_quality_meta(platform, meta)
+
+
+def _print_quality_meta(platform: str, meta: dict[str, Any]) -> None:
+    """Display critic scores and backflow info inline after a platform's content."""
+    critique = meta.get("critique") or {}
+    scores = critique.get("scores") or {}
+    parts: list[str] = []
+
+    # Score badges: fidelity / engagement / alignment + total.
+    for axis in ("fidelity", "engagement", "alignment"):
+        val = scores.get(axis)
+        if val is not None:
+            color = "green" if int(val) >= 4 else ("yellow" if int(val) >= 3 else "red")
+            parts.append(f"{axis[:3]} [{color}]{val}[/]")
+
+    total = critique.get("total")
+    if total is not None:
+        parts.append(f"total [bold]{total}/15[/]")
+
+    # Backflow indicator.
+    backflow = meta.get("backflow")
+    if backflow and backflow.get("attempted"):
+        stage = backflow.get("stage", "?")
+        pre = backflow.get("pre_backflow_score", "?")
+        post = backflow.get("post_backflow_score", "?")
+        parts.append(f"backflow {stage} ({pre}→{post})")
+    elif meta.get("rewritten"):
+        parts.append("rewritten")
+
+    skipped = meta.get("skipped")
+    if skipped:
+        parts.append(f"[dim]skipped: {skipped}[/]")
+
+    if parts:
+        console.print(f"  [dim]quality:[/] " + "  ".join(parts))
+
 
 def print_optimize_manifest(manifest: dict[str, Any]) -> None:
     """Print the optimize command result manifest."""

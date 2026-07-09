@@ -1638,6 +1638,64 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("serverInfo", result.stdout)
         self.assertIn("promoagent", result.stdout)
 
+    def test_python_cli_fill_help_shows_all(self):
+        """fill accepts 'all' as a platform argument."""
+        result = subprocess.run(
+            [sys.executable, "-m", "promoagent", "fill", "--help"],
+            cwd=ROOT, text=True, capture_output=True, check=True,
+        )
+        self.assertIn("all", result.stdout)
+
+    def test_python_cli_publish_list_shows_all_hint(self):
+        """publish --list mentions the 'all' shortcut."""
+        result = subprocess.run(
+            [sys.executable, "-m", "promoagent", "publish", "--list"],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        self.assertIn("all", result.stderr + result.stdout)
+
+    def test_python_cli_publish_dry_run_all(self):
+        """publish all --dry-run doesn't crash and mentions platforms."""
+        # No assets → should report no platforms, not crash.
+        env = {**os.environ, "PROMOAGENT_CACHE_DIR": str(Path(tempfile.mkdtemp()))}
+        result = subprocess.run(
+            [sys.executable, "-m", "promoagent", "publish", "all", "--dry-run",
+             "--assets-dir", str(Path(tempfile.mkdtemp()))],
+            cwd=ROOT, env=env, text=True, capture_output=True,
+        )
+        # No platforms available → exit 1 with error, not a crash.
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_print_promo_result_shows_critic_scores(self):
+        """print_promo_result displays _meta.critique scores when present."""
+        from promoagent.ui import print_promo_result
+        import io
+        from rich.console import Console
+        from promoagent import ui
+        old = ui.console
+        buf = io.StringIO()
+        ui.console = Console(file=buf, stderr=False, force_terminal=False, width=200)
+        try:
+            print_promo_result({
+                "promotions": {
+                    "xiaohongshu": {
+                        "markdown": "内容",
+                        "_meta": {
+                            "quality_mode": "polished",
+                            "critique": {"scores": {"fidelity": 4, "engagement": 3, "alignment": 5}, "total": 12},
+                            "rewritten": True,
+                            "backflow": None,
+                        },
+                    }
+                }
+            })
+        finally:
+            ui.console = old
+        out = buf.getvalue()
+        self.assertIn("quality:", out)
+        self.assertIn("12/15", out)
+        self.assertIn("rewritten", out)
+
     def test_promoagent_bin_delegates_to_python_cli(self):
         result = subprocess.run(
             [str(ROOT / "bin" / "promoagent"), "--version"],
