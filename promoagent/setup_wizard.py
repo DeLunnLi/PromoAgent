@@ -1,6 +1,7 @@
 """Interactive setup wizard for PromoAgent first-time users."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -124,6 +125,39 @@ def run_setup() -> int:
     return 0
 
 
+def _ping_ai_key() -> bool | None:
+    """Lightweight check that the configured AI key actually works.
+
+    Sends a minimal chat request; returns True on 200, False on auth error
+    (401/403), None on timeout/network error (so we don't false-negative on
+    a flaky connection). Keeps the ping under 8 seconds so doctor stays fast.
+    """
+    import urllib.error
+    import urllib.request
+    from .ai import ai_config
+
+    try:
+        config = ai_config()
+        body = json.dumps({
+            "model": config["model"],
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{config['baseUrl']}/chat/completions",
+            data=body,
+            headers={"Authorization": f"Bearer {config['apiKey']}",
+                     "Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=8)
+        return True
+    except urllib.error.HTTPError as exc:
+        return exc.code not in (401, 403)
+    except Exception:  # noqa: BLE001 — timeout / connection error → skip verify
+        return None
+
+
 def run_doctor() -> int:
     """Check configuration and dependencies."""
     from .ai import has_ai_key
@@ -152,9 +186,15 @@ def run_doctor() -> int:
     ai_ok = has_ai_key()
     image_ok = has_image_key()
 
-    # Check AI API Key
+    # Check AI API Key — existence + lightweight validity ping
     if ai_ok:
-        table.add_row("AI API Key", "[green]✓[/]", "Configured")
+        validity = _ping_ai_key()
+        if validity is True:
+            table.add_row("AI API Key", "[green]✓[/]", "Configured (verified)")
+        elif validity is False:
+            table.add_row("AI API Key", "[yellow]⚠[/]", "Configured but API returned error (key may be invalid/expired)")
+        else:
+            table.add_row("AI API Key", "[green]✓[/]", "Configured (skip verify)")
     else:
         table.add_row("AI API Key", "[red]✗[/]", "Not found (run: promoagent setup)")
 
