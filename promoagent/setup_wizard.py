@@ -83,6 +83,9 @@ def run_setup() -> int:
     if Confirm.ask("Enable browser auto-fill? (requires Playwright)", default=False):
         console.print("[dim]Run: pip install 'promoagent[fill]'[/]")
 
+    if Confirm.ask("Enable card image rendering? (HTML→PNG for xhs/wechat/twitter)", default=False):
+        console.print("[dim]Run: pip install 'promoagent[render]'[/]")
+
     if Confirm.ask("Enable MCP Server? (for Claude Desktop integration)", default=False):
         console.print("[dim]Run: pip install 'promoagent[mcp]'[/]")
 
