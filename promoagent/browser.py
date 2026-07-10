@@ -50,15 +50,6 @@ def _require_playwright():
 # Human-like typing helper
 # ---------------------------------------------------------------------------
 
-def _human_type(page, selector: str, text: str, delay_ms: tuple = (30, 80)) -> None:
-    """Type text into an element character by character with random delays."""
-    el = page.locator(selector).first
-    el.click()
-    for char in text:
-        el.type(char)
-        time.sleep(random.uniform(delay_ms[0], delay_ms[1]) / 1000)
-
-
 def _fill_rich_editor(page, selector: str, text: str) -> None:
     """Fill a rich-text editor (Quill, Draft.js, Slate, etc.) with content."""
     el = page.locator(selector).first

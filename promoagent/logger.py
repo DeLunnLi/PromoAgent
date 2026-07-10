@@ -129,9 +129,6 @@ class Logger:
     def error(self, message: str, **kwargs: Any) -> None:
         self._log(LogLevel.ERROR, message, **kwargs)
 
-    def critical(self, message: str, **kwargs: Any) -> None:
-        self._log(LogLevel.CRITICAL, message, **kwargs)
-
     # Aliases for compatibility
     warn = warning
 

@@ -411,36 +411,6 @@ def image_brief(
     }
 
 
-def ask_image_brief_interactively(result: dict[str, Any], options: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Collect ad-image direction in a terminal session."""
-    options = dict(options or {})
-    if not sys.stdin.isatty():
-        return options
-
-    current = image_brief(result, options=options)
-    skill_default = options.get("skill") or os.environ.get("PROMOAGENT_IMAGE_SKILL") or "auto"
-    skill_choices = ", ".join(["auto", *list_image_skills()])
-    print("\n✦ 交互式广告生图 brief（直接回车使用默认值）", file=sys.stderr)
-    prompts = [
-        ("skill", f"创意 skill（{skill_choices}）", skill_default),
-        ("title", "广告标题", current.get("title", "")),
-        ("subtitle", "副标题/核心卖点", current.get("subtitle", "")),
-        ("cta", "CTA 按钮文案", current.get("cta", "")),
-        ("badges", "角标/卖点标签（逗号分隔）", "，".join(current.get("badges", []))),
-        ("note", "视觉方向（例如：更像小红书真实探店封面/高端产品广告/强转化电商风）", current.get("note", "")),
-    ]
-    for key, label, default in prompts:
-        suffix = f" [{default}]" if default else ""
-        try:
-            value = input(f"  {label}{suffix}: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n（跳过剩余图片 brief，继续生成）", file=sys.stderr)
-            break
-        if value:
-            options[key] = value
-    options["text_overlay"] = True
-    return options
-
 
 def _is_chinese_model(model: str) -> bool:
     """Detect if the model is a Chinese model that prefers Chinese prompts."""
@@ -1044,28 +1014,6 @@ def _sample_accent_color(image: Any) -> tuple[int, int, int]:
         return (37, 99, 235)
     return max(buckets, key=buckets.get)
 
-
-def _detect_content_region_brightness(image: Any, platform: str, fmt: str) -> tuple[bool, tuple[int, int, int, int]]:
-    """Detect the brightness of the content region where text will be placed.
-
-    Returns (is_bright, region_box).
-    """
-    width, height = image.size
-
-    if fmt == "portrait":
-        # For portrait (Xiaohongshu), text at top
-        margin = int(width * 0.07)
-        block = (margin, int(height * 0.055), width - margin, int(height * 0.36))
-    elif fmt == "landscape":
-        # For landscape, text on left side
-        margin = int(width * 0.06)
-        block = (margin, int(height * 0.13), int(width * 0.48), int(height * 0.78))
-    else:
-        # Square (WeChat)
-        margin = int(width * 0.075)
-        block = (margin, int(height * 0.075), int(width * 0.46), int(height * 0.44))
-
-    return _region_is_bright(image, block), block
 
 
 def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str, Any]) -> bool:

@@ -228,11 +228,6 @@ def list_platforms() -> list[PlatformSpec]:
     return platforms
 
 
-def get_platform_keys() -> list[str]:
-    """Get all valid platform keys (including aliases)."""
-    return list(PLATFORMS.keys())
-
-
 def get_primary_platforms() -> list[str]:
     """Get primary platform keys (no aliases)."""
     return ["xiaohongshu", "zhihu", "wechat", "twitter", "linkedin", "reddit", "producthunt", "showhn", "weibo", "telegram", "bluesky"]

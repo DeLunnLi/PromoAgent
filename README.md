@@ -171,15 +171,6 @@ promoagent draft <target> --stage blueprint --interactive
 promoagent draft --resume --stage produce
 ```
 
-### Legacy Commands (Deprecated)
-
-```bash
-# Old commands - still work but show deprecation warning
-promoagent promote <target> --platform all --ai  # Use 'draft' instead
-promoagent optimize <target> --ai --output <dir>  # Use 'draft' instead
-promoagent refine "feedback"                       # Use 'draft --resume --edit' instead
-```
-
 ---
 
 ## 🛠️ Installation Options
@@ -302,58 +293,45 @@ without re-running earlier stages.
 ### Custom Writing Style
 
 ```bash
-promoagent promote . \
-  --prompt-preset launch \
-  --prompt-note "Like a founder post-mortem, not marketing speak" \
-  --context ./notes.md \
-  --ai
+# Inject a brief that shapes the AI's voice across all platforms
+promoagent draft . --quality polished
+# Set PROMOAGENT_PROMO_BRIEF in .env for persistent style guidance
 ```
 
-### Interactive Ad Images
+### Card Image Rendering (HTML→PNG)
 
 ```bash
-promoagent optimize . \
-  --image \
-  --image-platforms xhs,wechat \
-  --image-skill auto \
-  --image-interactive \
-  --image-variants 2
-```
+# Generate HTML card images (deterministic, styleable) for Xiaohongshu/WeChat/Twitter
+promoagent draft . --image --image-style card --output-dir launch-assets
 
-`--image-skill auto` will choose a creative skill by recommendation type:
-`b2b-saas` for software/tools, `food-local` for restaurant and local lifestyle,
-`product-hero` for products, `event-poster` for events, `research-editorial` for papers,
-and `service-trust` for services/courses. Use `xhs-lifestyle` when the image should feel
-like a Xiaohongshu creator cover instead of a corporate banner.
-These built-in image skills use a structured prompt-spec approach inspired by the
-[GPT-Image2-Skill](https://github.com/wuyoscar/GPT-Image2-Skill) gallery/craft workflow:
-canvas and layout first, then concrete scene systems, material, lighting, palette, and checks.
-The generator treats the AI image as a clean campaign background plate and renders final
-headline/CTA typography locally, so the subject stays out of the copy-safe zone and Chinese
-text remains crisp.
-
-For non-interactive runs, pass the ad copy directly:
-
-```bash
-promoagent optimize . \
-  --image \
-  --image-platforms xhs \
-  --image-skill b2b-saas \
-  --image-title "一键把项目变成推广素材" \
-  --image-subtitle "自动读证据，生成多平台文案和广告封面" \
-  --image-cta "立即生成" \
-  --image-badges "小红书封面,多平台推广,证据驱动"
+# Card styles: card (HTML render) / photo (AI image) / auto (xhs→card, else photo)
+# Each platform gets native dimensions: xhs 1080×1440, wechat 21:9+1:1, twitter 1200×675
 ```
 
 ### Browser Auto-Fill
 
 ```bash
-# Fill content to Xiaohongshu (requires login)
+# Fill a single platform
 promoagent fill xhs --assets-dir ./launch-assets
 
-# Fill to Twitter
-promoagent fill twitter --content "Your tweet here"
+# Fill all supported platforms at once
+promoagent fill all
+
+# Fill multiple platforms
+promoagent fill xhs,twitter,linkedin
 ```
+
+### Batch Publishing
+
+```bash
+# Publish to all platforms — API platforms publish directly, manual platforms open browser
+promoagent publish all --assets-dir ./launch-assets
+
+# Dry run (preview without publishing)
+promoagent publish all --dry-run
+
+# Single platform
+promoagent publish telegram --dry-run
 
 ### Batch Publishing
 

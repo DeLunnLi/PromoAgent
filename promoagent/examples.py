@@ -114,11 +114,6 @@ def _build_search_query(category: str, platform: str) -> str:
 # Source 1: Tavily web search
 # ---------------------------------------------------------------------------
 
-def _has_tavily_key(env: dict[str, str] | None = None) -> bool:
-    env = env or os.environ
-    return bool(env.get("TAVILY_API_KEY"))
-
-
 def _search_tavily(query: str, api_key: str, max_results: int = 3) -> list[str]:
     """Call Tavily API and return a list of content snippets."""
     body = json.dumps({
@@ -155,11 +150,6 @@ def _search_tavily(query: str, api_key: str, max_results: int = 3) -> list[str]:
 # ---------------------------------------------------------------------------
 # Source 2: Exa neural / semantic search
 # ---------------------------------------------------------------------------
-
-def _has_exa_key(env: dict[str, str] | None = None) -> bool:
-    env = env or os.environ
-    return bool(env.get("EXA_API_KEY"))
-
 
 def _search_exa(query: str, api_key: str, max_results: int = 3) -> list[str]:
     """Call Exa neural search API and return a list of content snippets.

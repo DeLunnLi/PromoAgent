@@ -216,8 +216,3 @@ def parse_json_content(content: str) -> dict[str, Any]:
         raise
 
 
-def _with_spinner(fn, *args, label: str = "generating", **kwargs):
-    """Run function with a spinner."""
-    from .ui import progress_spinner
-    with progress_spinner(label):
-        return fn(*args, **kwargs)

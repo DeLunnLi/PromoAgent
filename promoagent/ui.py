@@ -93,22 +93,6 @@ def progress_spinner(description: str) -> Generator[Any, None, None]:
 
 
 @contextmanager
-def progress_bar(description: str, total: int | None = None) -> Generator[Progress, None, None]:
-    """Context manager for a progress bar."""
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(complete_style="green", finished_style="bright_green"),
-        TaskProgressColumn(),
-        TimeRemainingColumn(),
-        console=console,
-        transient=True,
-    )
-    with progress:
-        task = progress.add_task(description, total=total)
-        yield progress
-
-
 def print_analysis_result(result: dict[str, Any]) -> None:
     """Print a beautiful analysis result."""
     project = result.get("project", {})
@@ -309,41 +293,6 @@ def print_platforms_table() -> None:
         table.add_row(f"{spec.icon} {spec.name_cn}", spec.key, spec.style, api_mark)
 
     console.print(table)
-
-
-def interactive_select_platforms() -> list[str]:
-    """Interactive platform selection (if inquirer is available)."""
-    try:
-        import inquirer
-        from inquirer import Checkbox, Text
-
-        questions = [
-            Checkbox(
-                'platforms',
-                message="Select platforms (Space to select, Enter to confirm)",
-                choices=[
-                    ('小红书 (Xiaohongshu)', 'xhs'),
-                    ('知乎 (Zhihu)', 'zhihu'),
-                    ('微信 (WeChat)', 'wechat'),
-                    ('Twitter/X', 'twitter'),
-                    ('LinkedIn', 'linkedin'),
-                    ('Reddit', 'reddit'),
-                    ('Show HN', 'showhn'),
-                    ('Product Hunt', 'producthunt'),
-                    ('Telegram', 'telegram'),
-                    ('Bluesky', 'bluesky'),
-                    ('微博 (Weibo)', 'weibo'),
-                ],
-                default=['xhs', 'twitter'],
-            ),
-        ]
-
-        answers = inquirer.prompt(questions)
-        return answers['platforms'] if answers else ['all']
-    except ImportError:
-        # Fallback to simple input
-        console.print("[dim]Install 'inquirer' for interactive selection: pip install inquirer[/]")
-        return ['all']
 
 
 def ask_for_clarifications(gaps: list[str]) -> dict[str, str]:
