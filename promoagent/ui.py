@@ -4,7 +4,6 @@ Provides beautiful CLI output with progress bars, panels, tables, and animations
 """
 from __future__ import annotations
 
-import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
@@ -24,8 +23,6 @@ from rich.progress import (
 from rich.table import Table
 from rich.syntax import Syntax
 from rich.tree import Tree
-from rich.align import Align
-from rich.columns import Columns
 from rich import box
 
 # Global console
