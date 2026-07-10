@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from promoagent.render import (
-    split_into_cards, build_card_html, render_xhs_cards, render_platform_cards,
+    split_into_cards, build_card_html, render_platform_cards,
     get_spec, SPECS, is_card_platform,
     _split_markdown_sections, _first_paragraph,
 )
@@ -96,6 +96,13 @@ class TestPlatformSpecs(unittest.TestCase):
         for plat in ("zhihu", "reddit"):
             self.assertEqual(get_spec(plat).cards, "none")
 
+    def test_new_platforms_have_specs(self):
+        """Platforms that were missing specs now have them."""
+        for plat in ("producthunt", "showhn", "weibo", "telegram", "bluesky"):
+            spec = get_spec(plat)
+            self.assertIsNotNone(spec, f"{plat} should have a render spec")
+            self.assertNotEqual(spec.cards, "none", f"{plat} should not be pass-through")
+
     def test_unknown_platform_returns_none(self):
         self.assertIsNone(get_spec("nonexistent"))
 
@@ -132,10 +139,10 @@ class TestBuildCardHtml(unittest.TestCase):
 class TestRenderXhsCards(unittest.TestCase):
 
     def test_render_raises_without_playwright(self):
-        """When playwright isn't importable, render_xhs_cards raises RuntimeError."""
+        """When playwright isn't importable, render_platform_cards raises RuntimeError."""
         with patch("promoagent.render.sync_playwright", None):
             with self.assertRaises(RuntimeError):
-                render_xhs_cards({"title": "x"}, "/tmp/xhs_test_noplaywright")
+                render_platform_cards("xiaohongshu", {"title": "x"}, "/tmp/xhs_test_noplaywright")
 
     def test_render_calls_playwright_and_returns_paths(self):
         """Mock playwright to verify the render flow produces card metadata."""
@@ -158,7 +165,7 @@ class TestRenderXhsCards(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp, \
                 patch("promoagent.render.sync_playwright", lambda: _FakePlaywright()):
-            result = render_xhs_cards(content, tmp)
+            result = render_platform_cards("xiaohongshu", content, tmp)
         # cover + 1 body + cta = 3 cards
         self.assertEqual(len(result), 3)
         kinds = [r["kind"] for r in result]

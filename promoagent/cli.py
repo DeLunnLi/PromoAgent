@@ -80,6 +80,7 @@ def _build_parser() -> argparse.ArgumentParser:
     draft.add_argument("--quality", choices=["fast", "balanced", "polished"], default="balanced",
                        help="质量模式：fast(仅事实)/balanced(+平台知识+few-shot)/polished(+critic重写)。")
     draft.add_argument("--output-dir", default="launch-assets", help="Output directory for files.")
+    draft.add_argument("--dry-run", action="store_true", help="Run research/blueprint only, skip produce (saves API calls).")
     draft.add_argument("--json", action="store_true", help="Output as JSON.")
     draft.add_argument("-o", "--output", help="Output file.")
     _add_ai_options(draft)
@@ -182,18 +183,23 @@ def _run_fill(args: argparse.Namespace) -> int:
         platforms = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
 
     failures = 0
+    succeeded: list[str] = []
     for plat in platforms:
         try:
             content = args.content or load_content_from_assets(args.assets_dir, plat)
             print_info(f"Filling {plat}...")
             fill_platform(plat, content, title=args.title, headless=args.headless)
             print_success(f"Done: {plat}")
+            succeeded.append(plat)
         except FileNotFoundError as exc:
             print_error(f"{plat}: {exc}")
             failures += 1
         except Exception as exc:  # noqa: BLE001
             print_error(f"{plat}: {exc}")
             failures += 1
+    if len(platforms) > 1:
+        print_info(f"Fill summary: {len(succeeded)} succeeded, {failures} failed"
+                   + (f" ({', '.join(succeeded)})" if succeeded else ""))
     return 1 if failures else 0
 
 
@@ -222,6 +228,7 @@ def _run_publish_cmd(args: argparse.Namespace) -> int:
         platforms = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
 
     failures = 0
+    succeeded: list[str] = []
     for plat in platforms:
         try:
             content = args.content or load_content_from_assets(args.assets_dir, plat)
@@ -232,6 +239,7 @@ def _run_publish_cmd(args: argparse.Namespace) -> int:
 
         if args.dry_run:
             print_info(f"[DRY RUN] {plat}:\n{content[:300]}{'...' if len(content) > 300 else ''}")
+            succeeded.append(plat)
             continue
 
         # Route: API platform → publish_content; manual platform → browser fill.
@@ -240,13 +248,18 @@ def _run_publish_cmd(args: argparse.Namespace) -> int:
             from .browser import fill_platform
             fill_platform(plat, content, title=args.title, headless=args.headless)
             print_success(f"{plat}: browser filled")
+            succeeded.append(plat)
         else:
             result = publish_content(plat, content, title=args.title)
             if result.ok:
                 print_success(f"{plat}: published")
+                succeeded.append(plat)
             else:
                 print_error(f"{plat}: {result.error}")
                 failures += 1
+    if len(platforms) > 1:
+        print_info(f"Publish summary: {len(succeeded)} succeeded, {failures} failed"
+                   + (f" ({', '.join(succeeded)})" if succeeded else ""))
     return 1 if failures else 0
 
 
@@ -363,6 +376,9 @@ def _run_draft(args: argparse.Namespace) -> int:
 
     # Run research first so we can surface gaps before blueprint.
     stop_after = args.stage if args.stage != "all" else None
+    # --dry-run: stop after blueprint, skip produce (saves API calls).
+    if args.dry_run and stop_after is None:
+        stop_after = "blueprint"
     do_search = not args.no_search
     research_out = stage_research(result, state, options, search=do_search)
     outputs = {"research": research_out}
@@ -461,47 +477,53 @@ def _run_draft(args: argparse.Namespace) -> int:
                     console.print(f"  [dim]{md}...[/]")
 
     # Handle file output and image generation for full pipeline
-    if args.stage == "all" or args.stage == "produce":
-        if hasattr(args, 'output_dir') and args.output_dir:
-            # Generate and save files
-            output_path = Path(args.output_dir)
-            output_path.mkdir(parents=True, exist_ok=True)
-
-            produce_data = outputs.get("produce", {}).get("data", {})
-
-            # Save platform content to files
-            saved_files = []
-            for platform, content in produce_data.items():
-                if isinstance(content, dict) and "markdown" in content:
-                    filename = f"promo-{platform}.md"
-                    filepath = output_path / filename
-                    filepath.write_text(content.get("markdown", ""), encoding="utf-8")
-                    saved_files.append(filename)
-
-            # Save blueprint
-            blueprint = outputs.get("blueprint", {})
-            (output_path / "blueprint.json").write_text(
-                json.dumps(blueprint, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-
-            # Generate images if requested
-            if args.image:
-                from .image import generate_platform_images
-                try:
-                    image_options = {"platforms": args.platforms} if args.platforms else {}
-                    images = generate_platform_images(
-                        result, output_path, image_options,
-                        produce_data=produce_data,
-                        image_style=getattr(args, "image_style", "auto"),
-                    )
-                    if images:
-                        print_success(f"Generated {len(images)} images")
-                except Exception as exc:
-                    print_warning(f"Image generation failed: {exc}")
-
-            print_success(f"Saved {len(saved_files)} files to {output_path}")
+    if (args.stage == "all" or args.stage == "produce") and not args.dry_run:
+        _save_draft_outputs(args, outputs, result)
 
     return 0
+
+
+def _save_draft_outputs(args: argparse.Namespace, outputs: dict, result: dict) -> None:
+    """Save produce content to files + generate images. Extracted from _run_draft."""
+    if not getattr(args, "output_dir", None):
+        return
+
+    output_path = Path(args.output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    produce_data = outputs.get("produce", {}).get("data", {})
+
+    # Save platform content to files
+    saved_files = []
+    for platform, content in produce_data.items():
+        if isinstance(content, dict) and "markdown" in content:
+            filename = f"promo-{platform}.md"
+            filepath = output_path / filename
+            filepath.write_text(content.get("markdown", ""), encoding="utf-8")
+            saved_files.append(filename)
+
+    # Save blueprint
+    blueprint = outputs.get("blueprint", {})
+    (output_path / "blueprint.json").write_text(
+        json.dumps(blueprint, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    # Generate images if requested
+    if getattr(args, "image", False):
+        from .image import generate_platform_images
+        try:
+            image_options = {"platforms": args.platforms} if args.platforms else {}
+            images = generate_platform_images(
+                result, output_path, image_options,
+                produce_data=produce_data,
+                image_style=getattr(args, "image_style", "auto"),
+            )
+            if images:
+                print_success(f"Generated {len(images)} images")
+        except Exception as exc:
+            print_warning(f"Image generation failed: {exc}")
+
+    print_success(f"Saved {len(saved_files)} files to {output_path}")
 
 
 # ---------------------------------------------------------------------------

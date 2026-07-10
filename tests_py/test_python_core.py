@@ -1646,6 +1646,14 @@ class PythonCoreTest(unittest.TestCase):
         )
         self.assertIn("all", result.stdout)
 
+    def test_python_cli_draft_help_shows_dry_run(self):
+        """draft --help shows --dry-run."""
+        result = subprocess.run(
+            [sys.executable, "-m", "promoagent", "draft", "--help"],
+            cwd=ROOT, text=True, capture_output=True, check=True,
+        )
+        self.assertIn("--dry-run", result.stdout)
+
     def test_python_cli_publish_list_shows_all_hint(self):
         """publish --list mentions the 'all' shortcut."""
         result = subprocess.run(
@@ -1665,6 +1673,22 @@ class PythonCoreTest(unittest.TestCase):
         )
         # No platforms available → exit 1 with error, not a crash.
         self.assertNotEqual(result.returncode, 0)
+
+    def test_python_cli_publish_dry_run_multi_shows_summary(self):
+        """publish with multiple platforms --dry-run shows a summary line."""
+        # Create assets for two platforms so publish all has something to dry-run.
+        with tempfile.TemporaryDirectory() as tmp:
+            assets = Path(tmp) / "assets"
+            assets.mkdir()
+            (assets / "promo-telegram.md").write_text("test content", encoding="utf-8")
+            (assets / "promo-bluesky.md").write_text("test content", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-m", "promoagent", "publish", "telegram,bluesky",
+                 "--dry-run", "--assets-dir", str(assets)],
+                cwd=ROOT, text=True, capture_output=True,
+            )
+            combined = result.stderr + result.stdout
+            self.assertIn("summary", combined.lower())
 
     def test_print_promo_result_shows_critic_scores(self):
         """print_promo_result displays _meta.critique scores when present."""

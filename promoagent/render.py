@@ -59,13 +59,21 @@ SPECS: dict[str, PlatformRenderSpec] = {
     "linkedin":    PlatformRenderSpec("linkedin", 1080, 1080, "carousel"),
     "twitter":     PlatformRenderSpec("twitter", 1200, 675, "single"),
     "x":           PlatformRenderSpec("twitter", 1200, 675, "single"),
-    # Pass-through platforms: no image rendering.
+    "producthunt": PlatformRenderSpec("producthunt", 1200, 630, "single"),
+    "showhn":      PlatformRenderSpec("showhn", 1200, 675, "single"),
+    "weibo":       PlatformRenderSpec("weibo", 1080, 1440, "carousel"),
+    "telegram":    PlatformRenderSpec("telegram", 1200, 675, "single"),
+    "bluesky":     PlatformRenderSpec("bluesky", 1200, 675, "single"),
+    # Pass-through platforms: no image rendering (text-only).
     "zhihu":       PlatformRenderSpec("zhihu", 0, 0, "none"),
     "reddit":      PlatformRenderSpec("reddit", 0, 0, "none"),
 }
 
 # Platforms where card rendering is the default for --image-style auto.
-_CARD_PLATFORMS = {"xiaohongshu", "xhs", "wechat", "linkedin", "twitter", "x"}
+_CARD_PLATFORMS = {
+    "xiaohongshu", "xhs", "wechat", "linkedin", "twitter", "x",
+    "producthunt", "showhn", "weibo", "telegram", "bluesky",
+}
 
 
 def get_spec(platform: str) -> PlatformRenderSpec | None:
@@ -286,7 +294,11 @@ def render_platform_cards(
     platforms. Raises ``RuntimeError`` if Playwright is not installed.
     """
     spec = get_spec(platform)
-    if spec is None or spec.cards == "none":
+    if spec is None:
+        import logging
+        logging.getLogger("promoagent").info("no render spec for platform: %s", platform)
+        return []
+    if spec.cards == "none":
         return []
 
     out = Path(output_dir)
@@ -306,12 +318,3 @@ def render_platform_cards(
             sizes.append((spec.width, spec.height))
 
     return _render_cards_to_pngs(cards, sizes, out, prefix=spec.key)
-
-
-# ---------------------------------------------------------------------------
-# Back-compat: keep render_xhs_cards working for existing callers/tests.
-# ---------------------------------------------------------------------------
-
-def render_xhs_cards(content: dict[str, Any], output_dir: str | Path, *, theme: str = "default") -> list[dict[str, Any]]:
-    """Back-compat wrapper for render_platform_cards("xiaohongshu", ...)."""
-    return render_platform_cards("xiaohongshu", content, output_dir, theme=theme)

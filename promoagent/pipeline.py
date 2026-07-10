@@ -1289,7 +1289,9 @@ def stage_produce(
 
     if parallel and len(target_platforms) > 1:
         # Parallel generation
-        with ThreadPoolExecutor(max_workers=min(len(target_platforms), 3)) as executor:
+        # Parallel produce: default 3 workers, configurable via env for large platform sets.
+        max_workers = min(len(target_platforms), int(os.environ.get("PROMOAGENT_PRODUCE_WORKERS", "3")))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(
                     _generate_single_platform,

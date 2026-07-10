@@ -204,8 +204,23 @@ class TwitterBrowserFiller:
     persist_dir = ".s2l-browser/twitter"
 
     def fill(self, page, content: str, **kwargs) -> None:
-        text = content[:280]
-        print("  填写推文…", file=sys.stderr)
+        # Detect thread format (1/ xxx\n2/ xxx) from optimize._format_platform_content.
+        # If detected, fill the first tweet; user can add subsequent tweets manually
+        # (Twitter's thread UI requires clicking "Add another tweet" which is fragile
+        # to automate). For single tweets, just fill the text.
+        import re
+        thread_match = re.findall(r'^\d+/\s+(.+)$', content, re.MULTILINE)
+        if thread_match and len(thread_match) > 1:
+            # Thread: fill first tweet, inform user about the rest.
+            text = thread_match[0][:280]
+            print(f"  检测到推文串（{len(thread_match)} 条），填写第一条…", file=sys.stderr)
+            print(f"  剩余 {len(thread_match)-1} 条请手动添加：", file=sys.stderr)
+            for i, t in enumerate(thread_match[1:], 2):
+                print(f"    {i}/ {t[:100]}", file=sys.stderr)
+        else:
+            text = content[:280]
+            print("  填写推文…", file=sys.stderr)
+
         time.sleep(1)
         try:
             editor_sel = '[data-testid="tweetTextarea_0"], .DraftEditor-root, [contenteditable=true]'
