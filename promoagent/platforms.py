@@ -4,7 +4,7 @@ Centralized platform definitions to avoid duplication across modules.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -23,6 +23,11 @@ class PlatformSpec:
     api_support: bool
     best_for: str
     aspect_ratio: str = "1:1"  # Default for image generation
+    # Per-axis critic weights — higher = that axis matters more for this platform.
+    # Used by pipeline._critic_platform for weighted total calculation.
+    critic_weights: dict[str, float] = field(default_factory=lambda: {
+        "fidelity": 1.0, "engagement": 1.0, "alignment": 1.0,
+    })
 
 
 # Unified platform specifications
@@ -40,6 +45,7 @@ PLATFORMS: dict[str, PlatformSpec] = {
         api_support=False,
         best_for="Visual storytelling, lifestyle",
         aspect_ratio="3:4",
+        critic_weights={"fidelity": 0.8, "engagement": 1.4, "alignment": 0.8},
     ),
     "xhs": PlatformSpec(
         key="xiaohongshu",
@@ -68,6 +74,7 @@ PLATFORMS: dict[str, PlatformSpec] = {
         api_support=False,
         best_for="Technical deep-dives",
         aspect_ratio="16:9",
+        critic_weights={"fidelity": 1.4, "engagement": 0.8, "alignment": 0.8},
     ),
     "wechat": PlatformSpec(
         key="wechat",
@@ -82,6 +89,7 @@ PLATFORMS: dict[str, PlatformSpec] = {
         api_support=False,
         best_for="Long-form articles",
         aspect_ratio="1:1",
+        critic_weights={"fidelity": 1.2, "engagement": 1.0, "alignment": 0.8},
     ),
     "twitter": PlatformSpec(
         key="twitter",
@@ -96,6 +104,7 @@ PLATFORMS: dict[str, PlatformSpec] = {
         api_support=True,
         best_for="Quick announcements",
         aspect_ratio="16:9",
+        critic_weights={"fidelity": 0.8, "engagement": 1.3, "alignment": 0.9},
     ),
     "x": PlatformSpec(
         key="twitter",
@@ -124,6 +133,7 @@ PLATFORMS: dict[str, PlatformSpec] = {
         api_support=True,
         best_for="B2B professional",
         aspect_ratio="16:9",
+        critic_weights={"fidelity": 1.0, "engagement": 0.8, "alignment": 1.2},
     ),
     "reddit": PlatformSpec(
         key="reddit",

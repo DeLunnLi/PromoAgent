@@ -128,6 +128,12 @@ def _build_critic_user_prompt(platform: str, content: dict[str, Any],
                               facts_block: str, spec: dict[str, Any]) -> str:
     """Render the critic's user prompt (static schema/definitions + dynamic payload)."""
     facts_section = f"【研究事实】\n{facts_block}" if facts_block else "【研究事实】（无）"
+    weights = _get_critic_weights(platform)
+    weight_note = ""
+    if any(w != 1.0 for w in weights.values()):
+        heavy = [f"{k}({v})" for k, v in weights.items() if v > 1.0]
+        if heavy:
+            weight_note = f"\n\n注意：{platform}的内容特性决定了评分权重不同——{'、'.join(heavy)}权重更高，请重点审视这些维度。"
     return f"""评审以下{platform}内容：
 
 {facts_section}
@@ -162,7 +168,7 @@ def _build_critic_user_prompt(platform: str, content: dict[str, Any],
 三轴定义：
 - fidelity（事实保真）：内容是否可核验、是否包含研究关键事实、有无编造
 - engagement（吸引力）：开头3秒是否抓人、是否有具体场景/数字、是否避免模板腔
-- alignment（平台原生感）：是否符合平台风格/结构/长度、是否像广告感而非真实分享
+- alignment（平台原生感）：是否符合平台风格/结构/长度、是否像广告感而非真实分享{weight_note}
 
 问题分类：
 - fact_insufficient：事实不足/编造 → 需要回 research 补证据
@@ -173,8 +179,22 @@ def _build_critic_user_prompt(platform: str, content: dict[str, Any],
 primary_problem_type 选最严重的一类。suggested_edit 仅 structure_issue 时给，其他填 null。"""
 
 
-def _critic_should_rewrite(scores: dict[str, Any], total: int) -> bool:
-    """Rewrite when any axis drops below 3 or the total is under 10."""
+def _get_critic_weights(platform: str) -> dict[str, float]:
+    """Return per-axis critic weights for a platform (from PlatformSpec)."""
+    from .platforms import get_platform
+    spec = get_platform(platform)
+    if spec and spec.critic_weights:
+        return spec.critic_weights
+    return {"fidelity": 1.0, "engagement": 1.0, "alignment": 1.0}
+
+
+def _weighted_critic_total(scores: dict[str, Any], weights: dict[str, float]) -> float:
+    """Calculate weighted total: sum(score[k] * weight[k]) for each axis."""
+    return sum(int(scores.get(k, 0) or 0) * weights.get(k, 1.0) for k in _CRITIC_SCORE_AXES)
+
+
+def _critic_should_rewrite(scores: dict[str, Any], total: float) -> bool:
+    """Rewrite when any axis drops below 3 (absolute hard line) or weighted total < 10."""
     return any(int(scores.get(k, 0) or 0) < 3 for k in _CRITIC_SCORE_AXES) or total < 10
 
 
@@ -896,9 +916,27 @@ def _generate_single_platform(
         examples_block = format_examples_for_prompt(references)
 
     system_extra = f"\n\n{playbook_block}" if playbook_block else ""
+
+    # Polished mode: front-load the critic's quality standard so the model
+    # generates to target on the first try, reducing rewrite passes.
+    quality_constraints = ""
+    if quality_mode == QUALITY_POLISHED:
+        weights = _get_critic_weights(platform)
+        weight_hint = ""
+        heavy = max(weights, key=weights.get) if weights else ""
+        if heavy and weights.get(heavy, 1.0) > 1.0:
+            weight_hint = f"\n{platform}尤其重视{heavy}（权重更高），请确保该维度达到4分以上。"
+        quality_constraints = f"""
+
+【质量标准】你的输出将按以下三轴评分（1-5），请生成时即对标：
+- fidelity（事实保真）≥4：内容可核验，包含「关键事实」中至少2条，无编造。
+- engagement（吸引力）≥4：开头3秒抓人，有具体场景/数字，避免模板腔。
+- alignment（平台原生感）≥4：符合{platform}的风格/结构/长度，像真实分享非广告感。{weight_hint}
+未达标的内容会被重写，请一次做好。"""
+
     system_prompt = f"""你是{platform}内容专家。将 Blueprint 转换为该平台原生格式。
 平台特点：{spec['style']}，{spec['tone']}
-{system_extra}
+{system_extra}{quality_constraints}
 输出严格 JSON。""".strip()
 
     facts_section = f"\n\n{facts_block}\n" if facts_block else ""
@@ -1198,8 +1236,10 @@ def _critic_platform(
     _normalize_critique(critique)
 
     scores = critique.get("scores", {}) or {}
-    total = sum(int(scores.get(k, 0) or 0) for k in _CRITIC_SCORE_AXES)
-    critique["total"] = total
+    weights = _get_critic_weights(platform)
+    total = _weighted_critic_total(scores, weights)
+    critique["total"] = round(total, 1)  # weighted, may be non-integer
+    critique["critic_weights"] = weights  # record for transparency
     critique["should_rewrite"] = _critic_should_rewrite(scores, total)
     return critique
 

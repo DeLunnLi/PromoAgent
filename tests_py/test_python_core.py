@@ -863,7 +863,9 @@ class PythonCoreTest(unittest.TestCase):
         self.assertEqual(call_count["n"], 3, "polished+low score → generate+critic+rewrite")
         content = out["data"]["xiaohongshu"]
         self.assertTrue(content["_meta"]["rewritten"])
-        self.assertEqual(content["_meta"]["critique"]["total"], 7)
+        # Weighted total: xiaohongshu weights are {fidelity:0.8, engagement:1.4, alignment:0.8}
+        # scores {fidelity:2, engagement:2, alignment:3} → 1.6+2.8+2.4 = 6.8
+        self.assertAlmostEqual(content["_meta"]["critique"]["total"], 6.8, places=1)
 
     def test_critic_high_score_skips_rewrite(self):
         blueprint = {"data": {"positioning": {"one_liner": "L"},
@@ -1048,6 +1050,77 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("|".join(_CRITIC_PROBLEM_TYPES), prompt)
         self.assertIn("|".join(_CRITIC_PRIMARY_TYPES), prompt)
 
+    def test_critic_weighted_total_by_platform(self):
+        """Critic total uses platform weights — xiaohongshu weights engagement higher."""
+        from promoagent.pipeline import _critic_platform, _get_critic_weights, _weighted_critic_total
+
+        # Same scores on xiaohongshu vs zhihu → different weighted totals.
+        scores = {"fidelity": 3, "engagement": 5, "alignment": 3}
+        xhs_w = _get_critic_weights("xiaohongshu")
+        zhihu_w = _get_critic_weights("zhihu")
+        xhs_total = _weighted_critic_total(scores, xhs_w)
+        zhihu_total = _weighted_critic_total(scores, zhihu_w)
+        # xiaohongshu: 3*0.8 + 5*1.4 + 3*0.8 = 2.4+7+2.4 = 11.8
+        # zhihu: 3*1.4 + 5*0.8 + 3*0.8 = 4.2+4+2.4 = 10.6
+        self.assertAlmostEqual(xhs_total, 11.8, places=1)
+        self.assertAlmostEqual(zhihu_total, 10.6, places=1)
+        # xiaohongshu values engagement more → higher total for the same scores.
+        self.assertGreater(xhs_total, zhihu_total)
+
+    def test_critic_should_rewrite_absolute_threshold_unchanged(self):
+        """Any axis < 3 still triggers rewrite regardless of weights."""
+        from promoagent.pipeline import _critic_should_rewrite
+        # fidelity=2 (< 3) → rewrite even if weighted total is high.
+        self.assertTrue(_critic_should_rewrite({"fidelity": 2, "engagement": 5, "alignment": 5}, 99.0))
+        # All >= 3 but low total → rewrite.
+        self.assertTrue(_critic_should_rewrite({"fidelity": 3, "engagement": 3, "alignment": 3}, 9.0))
+        # All >= 3 and high total → no rewrite.
+        self.assertFalse(_critic_should_rewrite({"fidelity": 4, "engagement": 4, "alignment": 4}, 12.0))
+
+    def test_produce_polished_prompt_contains_quality_constraints(self):
+        """Polished mode front-loads critic quality standard into produce prompt."""
+        captured = []
+
+        def fake_dispatch(m, c):
+            captured.append(m[0]["content"])
+            return json.dumps({"markdown": "x"}, ensure_ascii=False)
+
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {"key_facts": ["x"]}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("quality-constraints", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch), \
+                 patch.object(pipeline, "find_examples", lambda r, **kw: []):
+                stage_produce(blueprint, research, state,
+                              options={"api_key": "k", "quality_mode": "polished"},
+                              platforms=["xiaohongshu"], parallel=False)
+        # First dispatch call is produce (has quality constraints), second is critic.
+        produce_system = captured[0] if captured else ""
+        self.assertIn("质量标准", produce_system)
+        self.assertIn("fidelity", produce_system)
+        self.assertIn("engagement", produce_system)
+
+    def test_produce_fast_mode_no_quality_constraints(self):
+        """Fast mode does NOT include quality constraints (saves prompt tokens)."""
+        captured = {}
+
+        def fake_dispatch(m, c):
+            captured["system"] = m[0]["content"]
+            return json.dumps({"markdown": "x"}, ensure_ascii=False)
+
+        blueprint = {"data": {"positioning": {"one_liner": "L"},
+                              "elements": [{"id": "hook", "label": "Hook", "content": "H"}]}}
+        research = {"data": {"facts": {}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PipelineState("no-constraints", cache_dir=Path(tmp))
+            with patch.object(pipeline, "dispatch_chat", fake_dispatch), \
+                 patch.object(pipeline, "find_examples", lambda r, **kw: []):
+                stage_produce(blueprint, research, state,
+                              options={"api_key": "k", "quality_mode": "fast"},
+                              platforms=["xiaohongshu"], parallel=False)
+        self.assertNotIn("质量标准", captured["system"])
+
     def test_backflow_expression_weak_uses_rewrite(self):
         """expression_weak → produce-only rewrite, no upstream rerun."""
         blueprint = {"data": {"positioning": {"one_liner": "L"},
@@ -1120,7 +1193,9 @@ class PythonCoreTest(unittest.TestCase):
         meta = out["data"]["xiaohongshu"]["_meta"]
         self.assertIsNotNone(meta["backflow"])
         self.assertEqual(meta["backflow"]["stage"], "blueprint")
-        self.assertEqual(meta["backflow"]["pre_backflow_score"], 10)
+        # Weighted: xiaohongshu {fidelity:0.8, engagement:1.4, alignment:0.8}
+        # scores {fidelity:4, engagement:4, alignment:2} → 3.2+5.6+1.6 = 10.4
+        self.assertAlmostEqual(meta["backflow"]["pre_backflow_score"], 10.4, places=1)
         self.assertEqual(call_count["n"], 4)
 
     def test_backflow_fact_insufficient_reruns_research(self):
