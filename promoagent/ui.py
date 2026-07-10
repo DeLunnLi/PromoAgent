@@ -12,14 +12,7 @@ from typing import Any, Generator
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
-from rich.progress import (
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    BarColumn,
-    TaskProgressColumn,
-    TimeRemainingColumn,
-)
+from rich.progress import Progress
 from rich.table import Table
 from rich.syntax import Syntax
 from rich.tree import Tree

@@ -5,7 +5,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
