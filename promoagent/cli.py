@@ -7,11 +7,10 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any
 
 from . import __version__
 from .analyzer import analyze_target
-from .ui import console, print_banner, print_success, print_error, print_warning, print_info, print_tip, print_code, print_analysis_result, print_promo_result, print_optimize_manifest, print_platforms_table, progress_spinner, ask_for_clarifications
+from .ui import console, print_banner, print_success, print_error, print_warning, print_info, print_tip, print_analysis_result, print_promo_result, print_platforms_table, progress_spinner, ask_for_clarifications
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -317,7 +316,6 @@ def _run_draft(args: argparse.Namespace) -> int:
         PipelineState,
         run_pipeline,
         stage_research,
-        stage_blueprint,
         stage_produce,
         edit_blueprint,
         preview_blueprint,

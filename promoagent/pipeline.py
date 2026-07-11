@@ -26,7 +26,7 @@ from typing import Any
 from .ai import ai_config, dispatch_chat, parse_json_content
 from .examples import find_examples, format_examples_for_prompt
 from .logger import logger
-from .platforms import get_platform, to_prompt_dict, get_primary_platforms, format_playbook_for_prompt
+from .platforms import get_platform, to_prompt_dict, format_playbook_for_prompt
 
 # ---------------------------------------------------------------------------
 # Quality modes — control how much enrichment each produce call gets.

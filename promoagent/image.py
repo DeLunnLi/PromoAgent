@@ -21,7 +21,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .image_skills import image_skill_prompt_lines, list_image_skills, resolve_image_skill
+from .image_skills import image_skill_prompt_lines, resolve_image_skill
 
 # ---------------------------------------------------------------------------
 # Platform dimensions — derived from format, configurable via env
