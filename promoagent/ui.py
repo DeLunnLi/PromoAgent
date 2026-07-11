@@ -64,17 +64,6 @@ def print_tip(message: str) -> None:
     ))
 
 
-def print_code(code: str, language: str = "bash", title: str | None = None) -> None:
-    """Print syntax-highlighted code."""
-    syntax = Syntax(code, language, theme="monokai", line_numbers=False)
-    console.print(Panel(
-        syntax,
-        title=f"[bold]{title}" if title else None,
-        border_style="dim",
-        box=box.ROUNDED,
-    ))
-
-
 @contextmanager
 def progress_spinner(description: str) -> Generator[Any, None, None]:
     """Context manager for a simple spinner."""
@@ -222,45 +211,6 @@ def _print_quality_meta(platform: str, meta: dict[str, Any]) -> None:
 
     if parts:
         console.print(f"  [dim]quality:[/] " + "  ".join(parts))
-
-
-def print_optimize_manifest(manifest: dict[str, Any]) -> None:
-    """Print the optimize command result manifest."""
-    output_dir = manifest.get("outputDir", "launch-assets")
-    generated = manifest.get("generated", [])
-    images = manifest.get("images", [])
-
-    # Summary
-    console.print(Panel(
-        f"[bold green]✓[/] Generated [bold]{len(generated)}[/] files in [bold cyan]{output_dir}[/]\n"
-        f"[bold green]✓[/] Model: [dim]{manifest.get('promoModel', 'N/A')}[/]",
-        title="[bold]📦 Launch Assets Created[/]",
-        border_style="green",
-        box=box.ROUNDED,
-    ))
-
-    # File tree
-    tree = Tree(f"[bold]{output_dir}/[/]")
-
-    text_files = [f for f in generated if not f.endswith(('.jpg', '.jpeg', '.png', '.gif'))]
-    image_files = [f for f in generated if f.endswith(('.jpg', '.jpeg', '.png', '.gif'))]
-    image_files += [Path(img.get("outputPath", "")).name for img in images if img.get("outputPath")]
-
-    if text_files:
-        text_branch = tree.add("[bold cyan]📝 Text Files[/]")
-        for f in text_files[:10]:
-            text_branch.add(f"[dim]{f}[/]")
-        if len(text_files) > 10:
-            text_branch.add(f"[dim]... and {len(text_files) - 10} more[/]")
-
-    if image_files:
-        img_branch = tree.add("[bold magenta]🖼️  Images[/]")
-        for f in image_files[:5]:
-            img_branch.add(f"[dim]{f}[/]")
-        if len(image_files) > 5:
-            img_branch.add(f"[dim]... and {len(image_files) - 5} more[/]")
-
-    console.print(tree)
 
 
 def print_platforms_table() -> None:
