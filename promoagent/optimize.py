@@ -45,7 +45,12 @@ def run_optimize(
             _write_promo_files(out, project, evidence, ai_content, generated)
 
         def _write_images() -> list[dict[str, Any]]:
-            return generate_platform_images(result, out, image_options)
+            # Pass ai_content as produce_data so card rendering works via the
+            # optimize path (not just the CLI draft path).
+            produce_data = ai_content if isinstance(ai_content, dict) else None
+            return generate_platform_images(result, out, image_options,
+                                            produce_data=produce_data,
+                                            image_style=image_options.get("image_style", "auto"))
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             text_future  = executor.submit(_write_text)

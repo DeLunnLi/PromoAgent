@@ -351,6 +351,12 @@ def _run_draft(args: argparse.Namespace) -> int:
             print(preview)
             return 0
 
+        # --dry-run on resume: just show blueprint, skip produce.
+        if args.dry_run:
+            print_info("Dry run: skipping produce (blueprint already saved).")
+            console.print(preview_blueprint(blueprint))
+            return 0
+
         # Continue to produce
         research = state.get("research")
         if research is None:
@@ -365,6 +371,10 @@ def _run_draft(args: argparse.Namespace) -> int:
         # Generate assets
         assets = generate_assets(blueprint, produce, platforms=platforms, options=options)
 
+        # Save files + images (resume was previously skipping this).
+        outputs = {"produce": produce, "blueprint": blueprint, "research": research}
+        _save_draft_outputs(args, outputs, result or {})
+
         if args.json:
             output = {"produce": produce.get("data", {}), "assets": assets}
             _write_or_print(json.dumps(output, ensure_ascii=False, indent=2), args.output)
@@ -374,7 +384,10 @@ def _run_draft(args: argparse.Namespace) -> int:
 
     # Run research first so we can surface gaps before blueprint.
     stop_after = args.stage if args.stage != "all" else None
-    # --dry-run: stop after blueprint, skip produce (saves API calls).
+    # --interactive: stop at blueprint for editing (don't waste produce API calls).
+    # --dry-run: also stop after blueprint, skip produce (saves API calls).
+    if args.interactive and stop_after is None:
+        stop_after = "blueprint"
     if args.dry_run and stop_after is None:
         stop_after = "blueprint"
     do_search = not args.no_search
@@ -394,8 +407,11 @@ def _run_draft(args: argparse.Namespace) -> int:
 
     # Continue to blueprint + produce. research is cached in state, so
     # run_pipeline will skip re-running it (and re-searching references).
+    # Pass --platforms so produce generates for the user's selection.
+    user_platforms = [p.strip() for p in args.platforms.split(",")] if args.platforms else None
     if stop_after != "research":
-        rest = run_pipeline(result, options, stop_after=stop_after, state=state, search=do_search)
+        rest = run_pipeline(result, options, stop_after=stop_after, state=state,
+                            search=do_search, platforms=user_platforms)
         outputs.update({k: v for k, v in rest.items() if k != "research"})
 
     # Handle interactive mode at blueprint stage
@@ -486,19 +502,24 @@ def _save_draft_outputs(args: argparse.Namespace, outputs: dict, result: dict) -
     if not getattr(args, "output_dir", None):
         return
 
+    from .optimize import _format_platform_content, _platform_filename
+
     output_path = Path(args.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     produce_data = outputs.get("produce", {}).get("data", {})
 
-    # Save platform content to files
+    # Save platform content to files — use _format_platform_content to surface
+    # title/thread/hashtags/publish_notes, not just markdown.
     saved_files = []
     for platform, content in produce_data.items():
-        if isinstance(content, dict) and "markdown" in content:
-            filename = f"promo-{platform}.md"
-            filepath = output_path / filename
-            filepath.write_text(content.get("markdown", ""), encoding="utf-8")
-            saved_files.append(filename)
+        if isinstance(content, dict) and "error" not in content:
+            rendered = _format_platform_content(content)
+            if rendered:
+                filename = _platform_filename(platform)
+                filepath = output_path / filename
+                filepath.write_text(rendered, encoding="utf-8")
+                saved_files.append(filename)
 
     # Save blueprint
     blueprint = outputs.get("blueprint", {})

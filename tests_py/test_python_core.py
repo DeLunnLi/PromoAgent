@@ -1765,6 +1765,40 @@ class PythonCoreTest(unittest.TestCase):
             combined = result.stderr + result.stdout
             self.assertIn("summary", combined.lower())
 
+    def test_fill_all_returns_canonical_keys(self):
+        """fill all should return canonical keys (xhs), not display names (小红书)."""
+        from promoagent.browser import list_supported_platforms
+        platforms = list_supported_platforms()
+        self.assertTrue(len(platforms) > 0)
+        # Must contain canonical keys that _FILLERS recognizes.
+        for p in platforms:
+            from promoagent.browser import _FILLERS
+            self.assertIn(p, _FILLERS, f"{p} must be a _FILLERS key")
+
+    def test_publish_xhs_alias_resolved(self):
+        """publish xhs should resolve to xiaohongshu (manual platform), not 'Unknown'."""
+        from promoagent.publish import publish_content
+        result = publish_content("xhs", "test content", env={})
+        self.assertFalse(result.ok)
+        self.assertIn("手动", result.error)  # NO_API message, not "Unknown platform"
+
+    def test_image_style_card_skips_ai_generation(self):
+        """image_style='card' should return early — no AI image API calls."""
+        from promoagent.image import generate_platform_images
+        from promoagent.analyzer import analyze_target
+        import tempfile
+
+        result = analyze_target("healthy-repo", cwd=FIXTURES)
+        produce_data = {"xiaohongshu": {"title": "T", "markdown": "## H\nbody", "hashtags": ["#x"]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            # No image API key → if AI gen runs, it prints a warning.
+            # With card style + return early, no AI key needed.
+            imgs = generate_platform_images(result, Path(tmp), {},
+                                            produce_data=produce_data, image_style="card")
+        # Should have card PNGs from render, not AI images.
+        self.assertTrue(len(imgs) > 0)
+        self.assertTrue(all(i.get("provider") == "render" for i in imgs))
+
     def test_print_promo_result_shows_critic_scores(self):
         """print_promo_result displays _meta.critique scores when present."""
         from promoagent.ui import print_promo_result

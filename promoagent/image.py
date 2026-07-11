@@ -1350,6 +1350,10 @@ def generate_platform_images(
                 except Exception as exc:  # noqa: BLE001
                     print(f"promoagent: {plat_key} card render failed: {exc}", file=sys.stderr)
 
+    # image_style='card': card rendering is the sole output — skip AI generation.
+    if image_style == "card" and produce_data:
+        return generated
+
     # Source 1: README images
     readme_imgs = fetch_readme_images(result, images_dir)
     generated.extend(readme_imgs)

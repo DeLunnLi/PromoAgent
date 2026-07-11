@@ -108,7 +108,9 @@ class TelegramPublisher(BasePlatformPublisher):
                 return PublishResult(True, "telegram", f"https://t.me/{chat_id}/{msg_id}")
             return PublishResult(False, "telegram", error=str(resp.get("description")))
         except Exception as exc:  # noqa: BLE001
-            return PublishResult(False, "telegram", error=str(exc))
+            # URLError str(exc) contains the full URL (with bot token) — redact it.
+            safe_msg = str(exc).replace(token, "***REDACTED***")
+            return PublishResult(False, "telegram", error=safe_msg)
 
 
 # ---------------------------------------------------------------------------
@@ -305,8 +307,15 @@ _PUBLISHERS: dict[str, type[BasePlatformPublisher]] = {
 # Platforms with no public API — content is generated, posting is manual
 NO_API_PLATFORMS = {
     "xiaohongshu": "小红书（无公开发布 API，请手动发布）",
+    "xhs":         "小红书（无公开发布 API，请手动发布）",
     "zhihu":       "知乎（无公开发布 API，请手动发布）",
     "wechat":      "微信（需企业认证公众号，请手动发布）",
+}
+
+# Aliases that resolve to canonical platform keys for publishing.
+_PUBLISH_ALIASES: dict[str, str] = {
+    "xhs": "xiaohongshu",
+    "x": "twitter",
 }
 
 
@@ -331,10 +340,14 @@ def publish_content(
     """Publish content to a single platform by name."""
     env = env or os.environ
 
+    # Resolve aliases (xhs→xiaohongshu, x→twitter) so publish works with
+    # the same keys users pass to draft/fill.
+    platform = _PUBLISH_ALIASES.get(platform.lower(), platform).lower()
+
     if platform in NO_API_PLATFORMS:
         return PublishResult(False, platform, error=NO_API_PLATFORMS[platform])
 
-    cls = _PUBLISHERS.get(platform.lower())
+    cls = _PUBLISHERS.get(platform)
     if not cls:
         return PublishResult(False, platform, error=f"Unknown platform: {platform}. Supported: {', '.join(_PUBLISHERS)}")
 

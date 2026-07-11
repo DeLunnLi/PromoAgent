@@ -345,10 +345,11 @@ def fill_platform(
 
 
 def list_supported_platforms() -> list[str]:
+    """Return canonical platform keys (not display names) for `fill all`."""
     seen = set()
     result = []
-    for cls in _FILLERS.values():
+    for key, cls in _FILLERS.items():
         if cls not in seen:
             seen.add(cls)
-            result.append(cls.name)
+            result.append(key)
     return result

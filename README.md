@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.3.0-orange.svg)](https://github.com/DeLunnLi/PromoAgent/releases)
+[![Version](https://img.shields.io/badge/Version-0.4.0-orange.svg)](https://github.com/DeLunnLi/PromoAgent/releases)
 
 *Turn projects, products, and ideas into ready-to-publish marketing content*
 
@@ -188,11 +188,14 @@ pip install -e ".[fill]"
 # MCP Server (Claude Desktop integration)
 pip install -e ".[mcp]"
 
+# Card image rendering (HTML→PNG for xhs/wechat/twitter)
+pip install -e ".[render]"
+
 # PDF OCR support
 pip install -e ".[ocr]"
 
 # Everything
-pip install -e ".[fill,mcp,ocr]"
+pip install -e ".[fill,mcp,render,ocr]"
 ```
 
 ---
@@ -293,9 +296,8 @@ without re-running earlier stages.
 ### Custom Writing Style
 
 ```bash
-# Inject a brief that shapes the AI's voice across all platforms
+# Use --quality polished for the best results with critic + backflow
 promoagent draft . --quality polished
-# Set PROMOAGENT_PROMO_BRIEF in .env for persistent style guidance
 ```
 
 ### Card Image Rendering (HTML→PNG)
@@ -369,11 +371,12 @@ Input → Evidence Extraction → AI Generation → Multi-Platform Output
 ## 🧪 Development
 
 ```bash
-# Install dev dependencies
-pip install -e ".[dev]"
+# Install with test dependencies
+pip install -e ".[mcp,render,pdf]"
+pip install pytest pytest-cov
 
 # Run tests
-python -m unittest discover -s tests_py -v
+python -m pytest tests_py/ -v
 
 # Run specific test
 python -m unittest tests_py.test_python_core.PythonCoreTest.test_analyzes_healthy_repo -v

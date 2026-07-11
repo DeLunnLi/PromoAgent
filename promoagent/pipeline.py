@@ -1445,6 +1445,7 @@ def run_pipeline(
     stop_after: str | None = None,
     state: PipelineState | None = None,
     search: bool = True,
+    platforms: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run the complete pipeline.
 
@@ -1454,6 +1455,7 @@ def run_pipeline(
         stop_after: Stop after this stage for interactive editing
         state: Optional existing state for resuming
         search: Whether to search reference ads during research
+        platforms: Optional platform list to override research recommendations
 
     Returns:
         All stage outputs
@@ -1480,6 +1482,7 @@ def run_pipeline(
         state,
         options,
         parallel=True,
+        platforms=platforms,
         result=result,
     )
 
