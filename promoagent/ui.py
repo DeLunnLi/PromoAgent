@@ -14,8 +14,6 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.progress import Progress
 from rich.table import Table
-from rich.syntax import Syntax
-from rich.tree import Tree
 from rich import box
 
 # Global console
