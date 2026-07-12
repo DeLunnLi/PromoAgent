@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 from promoagent.ai import _detect_provider, ai_config, dispatch_chat, parse_json_content
 from promoagent import cache
-from promoagent.logger import Logger, LogLevel, get_logger, log_duration, LogTimer
+from promoagent.logger import Logger, LogLevel, log_duration, LogTimer
 from promoagent.publish import (
     BlueskyPublisher, TelegramPublisher, TwitterPublisher,
     available_publishers, publish_content,

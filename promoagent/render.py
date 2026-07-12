@@ -69,21 +69,15 @@ SPECS: dict[str, PlatformRenderSpec] = {
     "reddit":      PlatformRenderSpec("reddit", 0, 0, "none"),
 }
 
-# Platforms where card rendering is the default for --image-style auto.
-_CARD_PLATFORMS = {
-    "xiaohongshu", "xhs", "wechat", "linkedin", "twitter", "x",
-    "producthunt", "showhn", "weibo", "telegram", "bluesky",
-}
-
-
 def get_spec(platform: str) -> PlatformRenderSpec | None:
     """Return the render spec for a platform, resolving aliases."""
     return SPECS.get(platform.lower().strip())
 
 
 def is_card_platform(platform: str) -> bool:
-    """Whether card rendering applies (vs AI photo for --image-style auto)."""
-    return platform.lower().strip() in _CARD_PLATFORMS
+    """Whether card rendering applies (has a non-'none' spec)."""
+    spec = get_spec(platform)
+    return spec is not None and spec.cards != "none"
 
 
 # ---------------------------------------------------------------------------
@@ -284,8 +278,6 @@ def render_platform_cards(
     platform: str,
     content: dict[str, Any],
     output_dir: str | Path,
-    *,
-    theme: str = "default",
 ) -> list[dict[str, Any]]:
     """Render card PNGs for a platform from produce ``content``.
 

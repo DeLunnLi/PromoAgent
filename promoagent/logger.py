@@ -137,20 +137,6 @@ class Logger:
 logger = Logger()
 
 
-def get_logger(name: str | None = None) -> Logger:
-    """Get a logger instance.
-
-    Args:
-        name: Logger name (default: promoagent)
-
-    Returns:
-        Logger instance
-    """
-    if name is None or name == COMPONENT:
-        return logger
-    return Logger(name=name)
-
-
 def log_duration(operation: str, start_time: float, **context: Any) -> None:
     """Log the duration of an operation.
 
@@ -204,23 +190,3 @@ class LogTimer:
                 duration_ms=round(duration_ms, 2),
                 **self.context
             )
-
-
-def configure(
-    level: LogLevel | None = None,
-    use_json: bool | None = None,
-) -> None:
-    """Configure global logging settings.
-
-    Args:
-        level: Minimum log level
-        use_json: Whether to use JSON format
-    """
-    global logger, DEFAULT_LEVEL, LOG_FORMAT
-
-    if level is not None:
-        DEFAULT_LEVEL = level
-    if use_json is not None:
-        LOG_FORMAT = "json" if use_json else "text"
-
-    logger = Logger(level=DEFAULT_LEVEL)

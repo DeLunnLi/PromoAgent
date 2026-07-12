@@ -5,20 +5,17 @@ Provides beautiful CLI output with progress bars, panels, tables, and animations
 from __future__ import annotations
 
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Generator
 
 # Rich imports
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
-from rich.progress import Progress
 from rich.table import Table
 from rich import box
 
 # Global console
 console = Console(stderr=True, highlight=False)
-stdout_console = Console(highlight=False)
 
 
 def print_banner() -> None:
@@ -256,37 +253,3 @@ def ask_for_clarifications(gaps: list[str]) -> dict[str, str]:
         if answer.strip():
             answers[gap] = answer.strip()
     return answers
-
-
-class LiveProgress:
-    """Live progress display for multi-stage operations."""
-
-    def __init__(self, stages: list[str]):
-        self.stages = stages
-        self.current = 0
-        self.console = Console(stderr=True)
-
-    def __enter__(self) -> LiveProgress:
-        self._render()
-        return self
-
-    def __exit__(self, *args: Any) -> None:
-        pass
-
-    def next(self, message: str | None = None) -> None:
-        """Move to next stage."""
-        self.current += 1
-        self._render(message)
-
-    def _render(self, message: str | None = None) -> None:
-        """Render current state."""
-        self.console.clear()
-        print_banner()
-
-        for i, stage in enumerate(self.stages):
-            if i < self.current:
-                self.console.print(f"[bold green]✓[/] [dim]{stage}[/]")
-            elif i == self.current:
-                self.console.print(f"[bold cyan]→[/] [bold]{stage}[/]" + (f" — {message}" if message else ""))
-            else:
-                self.console.print(f"[dim]○ {stage}[/]")

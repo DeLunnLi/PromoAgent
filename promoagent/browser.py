@@ -284,7 +284,6 @@ def fill_platform(
     title: str = "",
     tags: list[str] | None = None,
     headless: bool = False,
-    pause_message: str = "",
 ) -> None:
     """Open a browser, navigate to the platform, fill content, then pause for user."""
     _require_playwright()
@@ -332,7 +331,7 @@ def fill_platform(
         filler.fill(page, content, title=title, tags=tags)
 
         # Pause for user review
-        msg = pause_message or (
+        msg = (
             f"\n✅ 内容已填写完成！\n"
             f"   请在浏览器中检查内容，然后点击「发布」按钮。\n"
             f"   完成后按回车关闭浏览器。"

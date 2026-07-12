@@ -70,7 +70,6 @@ def _build_parser() -> argparse.ArgumentParser:
     draft.add_argument("--edit", help="Edit blueprint: JSON file with edits {element_id: new_content}")
     draft.add_argument("--preview", action="store_true", help="Preview blueprint content.")
     draft.add_argument("--resume", action="store_true", help="Resume from saved blueprint.")
-    draft.add_argument("--parallel", action="store_true", default=True, help="Parallel platform generation.")
     draft.add_argument("--platforms", help="Comma-separated list of target platforms.")
     draft.add_argument("--image", action="store_true", help="Generate cover images.")
     draft.add_argument("--image-style", choices=["card", "photo", "auto"], default="auto",
@@ -366,7 +365,7 @@ def _run_draft(args: argparse.Namespace) -> int:
         # result enables polished-mode backflow to re-run research on fact gaps.
         result = state.get("result")
         produce = stage_produce(blueprint, research, state, options,
-                                platforms=platforms, parallel=args.parallel, result=result)
+                                platforms=platforms, result=result)
 
         # Generate assets
         assets = generate_assets(blueprint, produce, platforms=platforms, options=options)

@@ -569,7 +569,6 @@ def stage_blueprint(
     result: dict[str, Any],
     options: dict[str, Any] | None = None,
     force: bool = False,
-    custom_elements: list[str] | None = None,
 ) -> dict[str, Any]:
     """Blueprint stage: Generate structured content elements.
 
@@ -593,7 +592,7 @@ def stage_blueprint(
     if strategy.get("creative_direction", {}).get("tone") == "problem_solution":
         default_elements.insert(2, "problem")
 
-    element_types = custom_elements or default_elements
+    element_types = default_elements
 
     # Build element generation prompt
     element_specs = []
@@ -701,7 +700,6 @@ def stage_blueprint(
         "raw": response,
         "messages": messages,
         "timestamp": time.time(),
-        "interactive": True,
         "_upstream": {"research": research_ts},
     }
 
