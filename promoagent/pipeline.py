@@ -1290,17 +1290,21 @@ def stage_produce(
     """
     quality_mode = quality_mode or _resolve_quality_mode(options)
 
-    # Cache: hit only when the stored quality_mode matches AND no upstream
-    # stage was regenerated since this produce was built.
+    # Cache: hit only when quality_mode matches, no upstream staleness, AND
+    # the requested platforms match the cached set (avoid stale platform selection).
     if not force and state.has("produce"):
         cached = state.get("produce")
         cached_mode = (cached.get("_meta") or {}).get("quality_mode", QUALITY_FAST)
+        cached_platforms = set(cached.get("platforms") or [])
+        requested_platforms = set(platforms) if platforms else None
+        platforms_match = (requested_platforms is None) or (requested_platforms == cached_platforms)
         stale = (state.is_stale("produce", "research")
                  or state.is_stale("produce", "blueprint"))
-        if cached_mode == quality_mode and not stale:
+        if cached_mode == quality_mode and not stale and platforms_match:
             logger.info("using cached produce stage")
             return cached
-        logger.info("regenerating produce", cached_mode=cached_mode, requested=quality_mode, stale=stale)
+        logger.info("regenerating produce", cached_mode=cached_mode, requested=quality_mode, stale=stale,
+                    platforms_mismatch=not platforms_match)
 
     research_data = research.get("data", {})
     blueprint_data = blueprint.get("data", {})

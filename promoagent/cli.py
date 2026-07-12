@@ -185,8 +185,12 @@ def _run_fill(args: argparse.Namespace) -> int:
     for plat in platforms:
         try:
             content = args.content or load_content_from_assets(args.assets_dir, plat)
+            # Extract hashtags from content if present (optimize writes them as
+            # the last line, e.g. "#tag1 #tag2"). Pass to filler so XHS etc.
+            # can fill the tag field.
+            tags = _extract_tags(content) if not args.content else None
             print_info(f"Filling {plat}...")
-            fill_platform(plat, content, title=args.title, headless=args.headless)
+            fill_platform(plat, content, title=args.title, tags=tags, headless=args.headless)
             print_success(f"Done: {plat}")
             succeeded.append(plat)
         except FileNotFoundError as exc:
@@ -244,7 +248,8 @@ def _run_publish_cmd(args: argparse.Namespace) -> int:
         if plat in NO_API_PLATFORMS:
             print_info(f"{plat}: opening browser (manual platform)...")
             from .browser import fill_platform
-            fill_platform(plat, content, title=args.title, headless=args.headless)
+            tags = _extract_tags(content)
+            fill_platform(plat, content, title=args.title, tags=tags, headless=args.headless)
             print_success(f"{plat}: browser filled")
             succeeded.append(plat)
         else:
@@ -375,7 +380,12 @@ def _run_draft(args: argparse.Namespace) -> int:
         _save_draft_outputs(args, outputs, result or {})
 
         if args.json:
-            output = {"produce": produce.get("data", {}), "assets": assets}
+            # Match normal-path schema: {research, blueprint, produce} as data dicts.
+            output = {
+                "research": research.get("data", {}),
+                "blueprint": blueprint.get("data", {}),
+                "produce": produce.get("data", {}),
+            }
             _write_or_print(json.dumps(output, ensure_ascii=False, indent=2), args.output)
         else:
             print_promo_result(produce.get("data", {}))
@@ -385,9 +395,10 @@ def _run_draft(args: argparse.Namespace) -> int:
     stop_after = args.stage if args.stage != "all" else None
     # --interactive: stop at blueprint for editing (don't waste produce API calls).
     # --dry-run: also stop after blueprint, skip produce (saves API calls).
+    # --dry-run always wins even if --stage produce is set (don't waste API calls).
     if args.interactive and stop_after is None:
         stop_after = "blueprint"
-    if args.dry_run and stop_after is None:
+    if args.dry_run:
         stop_after = "blueprint"
     do_search = not args.no_search
     research_out = stage_research(result, state, options, search=do_search)
@@ -556,3 +567,13 @@ def _write_or_print(output: str, path: str | None) -> None:
         print_success(f"Saved to {p}")
     else:
         sys.stdout.write(output.rstrip() + "\n")
+
+
+def _extract_tags(content: str) -> list[str] | None:
+    """Extract hashtags from content's last non-empty line (optimize format)."""
+    lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    last = lines[-1]
+    tags = [w for w in last.split() if w.startswith("#")]
+    return tags if tags else None
