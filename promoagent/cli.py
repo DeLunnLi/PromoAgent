@@ -15,7 +15,8 @@ from .ui import console, print_banner, print_success, print_error, print_warning
 
 def main(argv: list[str] | None = None) -> int:
     argv = _normalize_argv(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] not in ("-h", "--help", "--version", "-v"):
+    # Don't show banner for serve (stdio MCP) or help/version.
+    if argv and argv[0] not in ("-h", "--help", "--version", "-v", "serve"):
         print_banner()
 
     parser = _build_parser()
@@ -29,26 +30,44 @@ def main(argv: list[str] | None = None) -> int:
         }
         return cmd_map.get(args.command, _run_analyze)(args)
     except (RuntimeError, ValueError, FileNotFoundError) as error:
-        _report_error(args, str(error))
+        _report_error(args, str(error), args.command)
         return 1
     except Exception as error:
         # Catch-all for unexpected errors
         msg = f"Unexpected error: {error}"
-        _report_error(args, msg)
+        _report_error(args, msg, args.command)
         if os.environ.get("DEBUG") or os.environ.get("PROMOAGENT_DEBUG"):
             console.print_exception()
         return 1
 
 
-def _report_error(args: argparse.Namespace, message: str) -> None:
+def _report_error(args: argparse.Namespace, message: str, command: str = "") -> None:
     """Surface an error to both the human (stderr) and, in --json mode, the
-    machine (stdout). Without the stdout path, scripts/CI/MCP callers that
-    parse ``--json`` output get an empty stdout on failure and can't tell
-    why."""
+    machine (stdout). Includes a context-aware "next step" hint."""
     print_error(message)
+    # Add a helpful "next step" based on the error and command.
+    hint = _error_hint(message, command)
+    if hint:
+        print_tip(hint)
     if getattr(args, "json", False) and not getattr(args, "output", None):
         # Emit a structured error to stdout so JSON consumers can parse it.
         sys.stdout.write(json.dumps({"ok": False, "error": message}, ensure_ascii=False) + "\n")
+
+
+def _error_hint(message: str, command: str = "") -> str:
+    """Return a context-aware 'next step' hint for common errors."""
+    msg_lower = message.lower()
+    if "401" in msg_lower or "unauthorized" in msg_lower or "authentication" in msg_lower:
+        return "Your API key may be invalid or expired. Run `promoagent setup` to reconfigure."
+    if "no promo file found" in msg_lower or "filenotfound" in msg_lower:
+        return "Run `promoagent draft . --output-dir launch-assets` first to generate content."
+    if "no platforms available" in msg_lower:
+        return "Run `promoagent draft .` to generate content, or configure API keys via `promoagent setup`."
+    if "connection" in msg_lower or "timeout" in msg_lower or "urlopen" in msg_lower:
+        return "Network error — check your internet connection and API base URL."
+    if "json" in msg_lower and "parse" in msg_lower:
+        return "The AI model returned invalid JSON. Try again or use a different model."
+    return ""
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -197,6 +216,7 @@ def _run_fill(args: argparse.Namespace) -> int:
             succeeded.append(plat)
         except FileNotFoundError as exc:
             print_error(f"{plat}: {exc}")
+            print_tip(f"Run `promoagent draft . --output-dir {args.assets_dir}` first to generate content.")
             failures += 1
         except Exception as exc:  # noqa: BLE001
             print_error(f"{plat}: {exc}")
