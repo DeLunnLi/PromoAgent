@@ -291,9 +291,8 @@ def fill_platform(
 
     filler_cls = _FILLERS.get(platform.lower())
     if not filler_cls:
-        print(f"promoagent: unsupported platform '{platform}'", file=sys.stderr)
-        print(f"Supported: {', '.join(sorted(set(_FILLERS.values()), key=lambda c: c.name))}", file=sys.stderr)
-        return
+        supported = sorted(set(key for key in _FILLERS))
+        raise ValueError(f"unsupported platform '{platform}'. Supported: {', '.join(supported)}")
 
     filler = filler_cls()
 

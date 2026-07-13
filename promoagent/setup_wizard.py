@@ -187,13 +187,14 @@ def run_doctor() -> int:
 
     ai_ok = has_ai_key()
     image_ok = has_image_key()
+    ai_validity = None  # True=verified, False=error, None=skipped/not-checked
 
     # Check AI API Key — existence + lightweight validity ping
     if ai_ok:
-        validity = _ping_ai_key()
-        if validity is True:
+        ai_validity = _ping_ai_key()
+        if ai_validity is True:
             table.add_row("AI API Key", "[green]✓[/]", "Configured (verified)")
-        elif validity is False:
+        elif ai_validity is False:
             table.add_row("AI API Key", "[yellow]⚠[/]", "Configured but API returned error (key may be invalid/expired)")
         else:
             table.add_row("AI API Key", "[green]✓[/]", "Configured (skip verify)")
@@ -228,8 +229,16 @@ def run_doctor() -> int:
 
     console.print(table)
 
-    # Overall status
-    if ai_ok or image_ok:
+    # Overall status — reflect AI key validity, not just existence.
+    if ai_validity is False:
+        console.print(Panel(
+            "[bold yellow]⚠ AI API key is configured but returned an error.[/]\n\n"
+            "The key may be invalid or expired. Run [cyan]promoagent setup[/] to reconfigure.",
+            border_style="yellow",
+            box=box.ROUNDED,
+        ))
+        return 1
+    elif ai_ok or image_ok:
         console.print(Panel(
             "[bold green]✓ PromoAgent has usable API configuration for the enabled feature set.[/]",
             border_style="green",

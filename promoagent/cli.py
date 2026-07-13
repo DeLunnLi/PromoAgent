@@ -232,6 +232,14 @@ def _run_publish_cmd(args: argparse.Namespace) -> int:
     failures = 0
     succeeded: list[str] = []
     for plat in platforms:
+        # Validate platform is known before trying to load content.
+        from .publish import _PUBLISH_ALIASES
+        resolved = _PUBLISH_ALIASES.get(plat.lower(), plat).lower()
+        if resolved not in NO_API_PLATFORMS and resolved not in available_publishers():
+            print_error(f"{plat}: Unknown platform. Use `promoagent publish --list` to see supported platforms.")
+            failures += 1
+            continue
+
         try:
             content = args.content or load_content_from_assets(args.assets_dir, plat)
         except FileNotFoundError as exc:
