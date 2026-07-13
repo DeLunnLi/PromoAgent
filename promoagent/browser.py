@@ -70,7 +70,7 @@ def _fill_rich_editor(page, selector: str, text: str) -> None:
     )
     # Fallback: use clipboard paste
     try:
-        page.evaluate(f"navigator.clipboard.writeText({text!r})")
+        page.evaluate("navigator.clipboard.writeText(%s)" % json.dumps(text))
         el.press("Control+V")
     except Exception:
         # If clipboard not available, type slowly

@@ -195,7 +195,7 @@ pip install -e ".[render]"
 pip install -e ".[ocr]"
 
 # Everything
-pip install -e ".[fill,mcp,render,ocr]"
+pip install -e ".[fill,mcp,render,pdf,ocr]"
 ```
 
 ---

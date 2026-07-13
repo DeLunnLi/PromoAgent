@@ -395,6 +395,13 @@ def _run_draft(args: argparse.Namespace) -> int:
             console.print(preview_blueprint(blueprint))
             return 0
 
+        # --resume --stage research/blueprint: stop there, don't run produce.
+        if args.stage in ("research", "blueprint"):
+            print_info(f"Resume: stopping at {args.stage} stage (no produce).")
+            if args.stage == "blueprint":
+                console.print(preview_blueprint(blueprint))
+            return 0
+
         # Continue to produce
         research = state.get("research")
         if research is None:
@@ -405,9 +412,6 @@ def _run_draft(args: argparse.Namespace) -> int:
         result = state.get("result")
         produce = stage_produce(blueprint, research, state, options,
                                 platforms=platforms, result=result)
-
-        # Generate assets
-        assets = generate_assets(blueprint, produce, platforms=platforms, options=options)
 
         # Save files + images (resume was previously skipping this).
         outputs = {"produce": produce, "blueprint": blueprint, "research": research}
@@ -432,6 +436,12 @@ def _run_draft(args: argparse.Namespace) -> int:
     # --dry-run: also stop after blueprint, skip produce (saves API calls).
     # --dry-run always wins even if --stage produce is set (don't waste API calls).
     if args.interactive and stop_after is None:
+        stop_after = "blueprint"
+    if args.dry_run:
+        stop_after = "blueprint"
+    # Warn if --edit/--preview used without --resume (they only work in resume mode).
+    if (args.edit or args.preview) and not args.resume:
+        print_warning("--edit/--preview require --resume to work. Ignoring for now.")
         stop_after = "blueprint"
     if args.dry_run:
         stop_after = "blueprint"

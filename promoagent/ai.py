@@ -22,7 +22,7 @@ _PROVIDER_DEFAULTS = {
 _KEY_MAP = {
     "anthropic": ["ANTHROPIC_API_KEY", "PROMOAGENT_API_KEY"],
     "gemini": ["GOOGLE_API_KEY", "GEMINI_API_KEY", "PROMOAGENT_API_KEY"],
-    "ollama": ["OLLAMA_API_KEY"],
+    "ollama": [],  # Ollama uses base_url detection, not API keys
     "modelscope": ["PROMOAGENT_MODELSCOPE_API_KEY", "MODELSCOPE_API_KEY", "PROMOAGENT_API_KEY"],
     "openai": ["PROMOAGENT_API_KEY", "OPENAI_API_KEY", "MODELSCOPE_API_KEY"],
 }

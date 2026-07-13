@@ -99,7 +99,8 @@ def split_into_cards(content: dict[str, Any], strategy: str = "carousel") -> lis
     title = str(content.get("title") or "").strip()
     md = str(content.get("markdown") or "").strip()
     hashtags = content.get("hashtags") or []
-    notes = str(content.get("publish_notes") or "").strip()
+    # publish_notes is internal advisory — NOT rendered on public card images.
+    notes = ""
 
     if not title:
         first = next((ln.strip() for ln in md.splitlines() if ln.strip() and not ln.startswith("#")), "")
@@ -117,8 +118,8 @@ def split_into_cards(content: dict[str, Any], strategy: str = "carousel") -> lis
         cards.append({"kind": "body", "heading": heading, "body_html": _md_to_html(body)})
     if len(cards) == 1 and md:  # no ## headings → one body card
         cards.append({"kind": "body", "heading": "", "body_html": _md_to_html(md)})
-    if hashtags or notes:
-        cards.append({"kind": "cta", "hashtags": " ".join(h for h in hashtags if h), "notes": notes})
+    if hashtags:
+        cards.append({"kind": "cta", "hashtags": " ".join(h for h in hashtags if h), "notes": ""})
     return cards
 
 
