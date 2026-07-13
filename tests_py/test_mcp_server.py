@@ -276,7 +276,9 @@ class TestMcpServer(_StateIsolationMixin, unittest.TestCase):
             out = _impl_build_image_prompt(sid, platform="xhs", model="Qwen/Qwen-Image")
         self.assertTrue(out["ok"], out)
         self.assertIn("小红书封面", out["prompt"])  # Chinese branch
-        self.assertNotIn("PROMO_RENDER_SPEC", out["prompt"])
+        # Chinese branch now injects full skill schema (English JSON effective for Qwen)
+        self.assertIn("PROMO_RENDER_SPEC", out["prompt"])
+        self.assertIn("hierarchy", out["prompt"])
 
     def test_s2l_build_image_prompt_missing_result_errors(self):
         with tempfile.TemporaryDirectory() as tmp, self._patch_state(tmp):

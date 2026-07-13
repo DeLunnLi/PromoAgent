@@ -444,17 +444,12 @@ def _build_chinese_prompt(
         "producthunt": "Product Hunt发布图",
     }.get(platform.lower(), "推广图片")
 
-    # Simplified skill mapping for Chinese prompts
-    skill_desc = {
-        "ad-cover": "专业广告封面，一个醒目的主视觉主体，干净的背景留出文字空间",
-        "xhs-lifestyle": "小红书风格生活分享图，真实自然的场景，温暖的色调，顶部留白给标题",
-        "food-local": "美食探店图，诱人的食物特写，真实的餐厅环境，温暖的灯光",
-        "product-hero": "产品展示图，精致的产品特写，简洁的背景，突出产品质感",
-        "event-poster": "活动海报，有氛围感的场景，清晰的空间感，专业灯光",
-        "b2b-saas": "B2B软件产品图，现代办公场景，抽象界面元素，专业商务风格",
-        "research-editorial": "学术编辑风格，简洁的几何图形，论文或文档元素，知性配色",
-        "service-trust": "服务信任图，整洁的工作场景，前后对比或进度展示，温暖专业",
-    }.get(skill.get("name", ""), "专业推广图片，一个清晰的主视觉，干净的背景")
+    # Inject full skill schema (English JSON is effective for Chinese models too).
+    # This replaces the previous single-sentence skill description with the
+    # complete hierarchy/scene_nouns/quality_checks/visual_reference.
+    from .image_skills import image_skill_prompt_lines
+    skill_lines = image_skill_prompt_lines(skill, platform=platform)
+    skill_block = "\n".join(skill_lines)
 
     variant_desc = ""
     if variant > 1:
@@ -484,10 +479,12 @@ def _build_chinese_prompt(
     prompt = f"""为"{name}"创建一张{platform_cn}。
 
 核心要求：
-- {skill_desc}
 - 项目描述：{desc[:100] if desc else "一个值得推荐的优质项目"}
 - 风格：精致、现代、专业级广告质感
 {platform_notes}
+
+创意技能与视觉规格（Creative Skill & Render Spec）：
+{skill_block}
 
 构图要求：
 - 一个明确的主视觉主体，不要多个分散的元素
@@ -1113,14 +1110,14 @@ def apply_text_overlay(image_path: str | Path, *, platform: str, brief: dict[str
             panel_outline = None
             title_ink = (28, 32, 38, 255) if bright else (250, 251, 252, 255)
             body_ink = (72, 78, 88, 240) if bright else (235, 237, 240, 245)
-            accent_ink = (255, 255, 255, 0)
+            accent_ink = (*accent_rgb, 220)
         else:
             # Default: Twitter/X, etc.
             panel_fill = (255, 255, 255, 178) if not bright else (255, 255, 255, 118)
             panel_outline = None
             title_ink = (18, 22, 30, 255) if bright else (255, 255, 255, 255)
             body_ink = (48, 55, 68, 235) if bright else (245, 247, 252, 232)
-            accent_ink = (255, 255, 255, 0)
+            accent_ink = (*accent_rgb, 220)
 
         if not bright:
             panel_fill = (10, 14, 22, 96)

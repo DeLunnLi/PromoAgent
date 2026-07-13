@@ -1952,15 +1952,19 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("1:1", wechat_prompt)
 
     def test_build_image_prompt_chinese_model_branch(self):
-        """Chinese image models (e.g. Qwen) get a Chinese-language prompt."""
+        """Chinese image models (e.g. Qwen) get a Chinese-language prompt with full skill schema."""
         result = analyze_target("healthy-repo", cwd=FIXTURES)
         prompt = build_image_prompt(result, platform="xhs", model="Qwen/Qwen-Image")
         self.assertIn("小红书封面", prompt)
         self.assertIn("核心要求", prompt)
         self.assertIn("竖版3:4比例", prompt)
-        # Chinese branch must NOT emit the English skill/render-spec block
-        self.assertNotIn("PROMO_RENDER_SPEC", prompt)
-        self.assertNotIn("Creative skill:", prompt)
+        # Chinese branch now injects full skill schema (English JSON is effective
+        # for Chinese models like Qwen — better than the old single-sentence desc).
+        self.assertIn("PROMO_RENDER_SPEC", prompt)
+        self.assertIn("Creative skill:", prompt)
+        self.assertIn("hierarchy", prompt)
+        self.assertIn("scene_nouns", prompt)
+        self.assertIn("visual_reference", prompt)
 
     def test_build_image_prompt_adapts_to_restaurant_recommendation(self):
         result = analyze_free_text("上海阿强火锅，主打麻辣鲜香，人均80元，位于静安区南京西路")
@@ -1995,7 +1999,9 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("research/document recommendation", prompt)
         self.assertIn("method clarity", prompt)
         self.assertIn("research-diagram-grammar", prompt)
-        self.assertIn("diagram_grammar", prompt)
+        # diagram_grammar was renamed to hierarchy/scene_nouns (schema unification)
+        self.assertIn("hierarchy", prompt)
+        self.assertIn("scene_nouns", prompt)
         self.assertIn("senior art director", prompt)
         self.assertIn("wide 16:9 header image", prompt)
 
