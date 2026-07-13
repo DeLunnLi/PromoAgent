@@ -52,18 +52,18 @@ def _report_error(args: argparse.Namespace, message: str) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="promoagent", description="Generate promotional content from repos, papers, and PDFs.")
+    parser = argparse.ArgumentParser(prog="promoagent", description="AI agent for multi-platform promotional content — repos, papers, PDFs → platform-native copy + card images.")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command")
 
     # analyze
-    analyze = sub.add_parser("analyze", help="Show evidence extracted from a source.")
+    analyze = sub.add_parser("analyze", help="Extract evidence from a source (repo/PDF/text). Run this first to see what PromoAgent finds.")
     _add_target(analyze)
     analyze.add_argument("--json", action="store_true", help="Print JSON output.")
     analyze.add_argument("-o", "--output", help="Write to file.")
 
     # draft - unified content generation
-    draft = sub.add_parser("draft", help="Generate promotional content with interactive editing.")
+    draft = sub.add_parser("draft", help="Generate promotional content: research → blueprint → produce. Use --quality polished for best results.")
     _add_target(draft)
     draft.add_argument("--stage", choices=["research", "blueprint", "produce", "all"], default="all", help="Run up to this stage.")
     draft.add_argument("--interactive", "-i", action="store_true", help="Stop at blueprint for editing.")
@@ -84,22 +84,22 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_ai_options(draft)
 
     # fill
-    fill = sub.add_parser("fill", help="Auto-fill content in browser.")
+    fill = sub.add_parser("fill", help="Auto-fill content in browser (use 'all' for every platform).")
     fill.add_argument("platform", help="Platform to fill (or 'all' for every available).")
     fill.add_argument("--content", help="Content to fill.")
     fill.add_argument("--assets-dir", default="launch-assets", help="Assets directory.")
     fill.add_argument("--title", default="", help="Post title.")
-    fill.add_argument("--headless", action="store_true", help="Headless mode.")
+    fill.add_argument("--no-headless", action="store_true", help="Show browser window (default: headless).")
 
     # publish
-    publish = sub.add_parser("publish", help="Publish to social platforms.")
+    publish = sub.add_parser("publish", help="Publish to social platforms (use 'all' for API + browser fill).")
     publish.add_argument("platform", nargs="?", help="Platform to publish to (or 'all' for every available).")
     publish.add_argument("--content", help="Content to publish.")
     publish.add_argument("--assets-dir", default="launch-assets", help="Assets directory.")
     publish.add_argument("--title", default="", help="Post title.")
     publish.add_argument("--dry-run", action="store_true", help="Preview only.")
     publish.add_argument("--list", action="store_true", help="List configured publishers.")
-    publish.add_argument("--headless", action="store_true", help="Headless browser for manual platforms (fill).")
+    publish.add_argument("--no-headless", action="store_true", help="Show browser window for manual platforms (default: headless).")
 
     # serve — launches the MCP server (stdio) for AI tool integration.
     sub.add_parser("serve", help="Launch the MCP server (for Claude Desktop / Cursor).")
@@ -109,6 +109,7 @@ def _build_parser() -> argparse.ArgumentParser:
     cache.add_argument("--stats", action="store_true", help="Show stats.")
     cache.add_argument("--clear", action="store_true", help="Clear cache.")
     cache.add_argument("--disable", action="store_true", help="Disable cache.")
+    cache.add_argument("--enable", action="store_true", help="Re-enable cache after --disable.")
 
     # platforms
     sub.add_parser("platforms", help="Show supported platforms.")
@@ -153,6 +154,7 @@ def _run_analyze(args: argparse.Namespace) -> int:
         _write_or_print(json.dumps(result, ensure_ascii=False, indent=2), args.output)
     else:
         print_analysis_result(result)
+        print_tip("Run `promoagent draft .` to generate promotional content from this source.")
     return 0
 
 
@@ -190,7 +192,7 @@ def _run_fill(args: argparse.Namespace) -> int:
             # can fill the tag field.
             tags = _extract_tags(content) if not args.content else None
             print_info(f"Filling {plat}...")
-            fill_platform(plat, content, title=args.title, tags=tags, headless=args.headless)
+            fill_platform(plat, content, title=args.title, tags=tags, headless=not args.no_headless)
             print_success(f"Done: {plat}")
             succeeded.append(plat)
         except FileNotFoundError as exc:
@@ -257,7 +259,7 @@ def _run_publish_cmd(args: argparse.Namespace) -> int:
             print_info(f"{plat}: opening browser (manual platform)...")
             from .browser import fill_platform
             tags = _extract_tags(content)
-            fill_platform(plat, content, title=args.title, tags=tags, headless=args.headless)
+            fill_platform(plat, content, title=args.title, tags=tags, headless=not args.no_headless)
             print_success(f"{plat}: browser filled")
             succeeded.append(plat)
         else:
@@ -292,6 +294,10 @@ def _run_cache(args: argparse.Namespace) -> int:
     if args.disable:
         cache.disable_cache()
         print_info("Cache disabled")
+        return 0
+    if getattr(args, "enable", False):
+        os.environ.pop("PROMOAGENT_CACHE_DISABLED", None)
+        print_success("Cache enabled")
         return 0
 
     stats = cache.get_stats()

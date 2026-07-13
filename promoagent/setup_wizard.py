@@ -79,14 +79,14 @@ def run_setup() -> int:
         if key:
             env_vars["TAVILY_API_KEY"] = key
 
+    if Confirm.ask("Enable MCP Server? (for Claude Desktop / Cursor)", default=False):
+        console.print("[dim]Run: pip install 'promoagent[mcp]'[/]")
+
     if Confirm.ask("Enable browser auto-fill? (requires Playwright)", default=False):
         console.print("[dim]Run: pip install 'promoagent[fill]'[/]")
 
     if Confirm.ask("Enable card image rendering? (HTML→PNG for xhs/wechat/twitter)", default=False):
         console.print("[dim]Run: pip install 'promoagent[render]'[/]")
-
-    if Confirm.ask("Enable MCP Server? (for Claude Desktop integration)", default=False):
-        console.print("[dim]Run: pip install 'promoagent[mcp]'[/]")
 
     # Step 4: Write .env file
     console.print("\n[bold]Step 4: Saving Configuration[/]")
@@ -212,7 +212,8 @@ def run_doctor() -> int:
         ("pypdf", "PDF text extraction", "pdf"),
         ("pypdfium2", "PDF rendering", "ocr"),
         ("pytesseract", "OCR for scanned PDFs", "ocr"),
-        ("playwright", "Browser auto-fill", "fill"),
+        ("playwright", "Browser auto-fill + Card rendering", "fill"),
+        ("markdown", "Card image rendering", "render"),
         ("mcp", "MCP Server", "mcp"),
     ]
 
