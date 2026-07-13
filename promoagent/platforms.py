@@ -89,7 +89,7 @@ PLATFORMS: dict[str, PlatformSpec] = {
         icon="💬",
         api_support=False,
         best_for="Long-form articles",
-        aspect_ratio="1:1",
+        aspect_ratio="21:9+1:1",
         critic_weights={"fidelity": 1.2, "engagement": 1.0, "alignment": 0.8},
     ),
     "twitter": PlatformSpec(

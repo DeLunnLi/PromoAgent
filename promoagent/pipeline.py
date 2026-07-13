@@ -732,7 +732,8 @@ def edit_blueprint(
     - {"_removeElement": element_id} - Remove element
     - {"_setStructure": structure_name} - Apply alternative structure
     """
-    data = blueprint.get("data", {}).copy()
+    import copy
+    data = copy.deepcopy(blueprint.get("data", {}))
     if "edit_history" not in data:
         data["edit_history"] = []
 

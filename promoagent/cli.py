@@ -297,10 +297,14 @@ def _run_publish_cmd(args: argparse.Namespace) -> int:
 
 
 def _has_assets_for(assets_dir: str, platform: str) -> bool:
-    """Quick check whether a promo file exists for this platform (no exception)."""
+    """Quick check whether a promo file exists for this platform (no exception).
+    Resolves aliases (xhs→xiaohongshu) so alias keys find the correct file."""
+    from .platforms import get_platform
     from .optimize import _platform_filename
+    spec = get_platform(platform)
+    canonical = spec.key if spec else platform
     from pathlib import Path
-    return (Path(assets_dir) / _platform_filename(platform)).exists()
+    return (Path(assets_dir) / _platform_filename(canonical)).exists()
 
 
 def _run_cache(args: argparse.Namespace) -> int:
