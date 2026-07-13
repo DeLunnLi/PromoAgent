@@ -11,8 +11,6 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from .logger import logger
-
 _PROVIDER_DEFAULTS = {
     "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
     "anthropic": {"base_url": "https://api.anthropic.com", "model": "claude-haiku-4-5"},

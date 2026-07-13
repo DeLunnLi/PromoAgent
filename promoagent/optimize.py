@@ -176,9 +176,6 @@ def _format_platform_content(item: Any) -> str:
     return "\n\n".join(p for p in parts if p).strip()
 
 
-# Back-compat alias for any external caller expecting the old name.
-_extract_markdown = _format_platform_content
-
 
 def _evidence_summary(project: dict[str, Any], evidence: dict[str, Any]) -> str:
     lines = [
