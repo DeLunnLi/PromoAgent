@@ -422,7 +422,8 @@ def _run_draft(args: argparse.Namespace) -> int:
             }
             _write_or_print(json.dumps(output, ensure_ascii=False, indent=2), args.output)
         else:
-            print_promo_result(produce.get("data", {}))
+            # Wrap produce data in the format print_promo_result expects.
+            print_promo_result({"promotions": produce.get("data", {})})
         return 0
 
     # Run research first so we can surface gaps before blueprint.
@@ -458,8 +459,9 @@ def _run_draft(args: argparse.Namespace) -> int:
                             search=do_search, platforms=user_platforms)
         outputs.update({k: v for k, v in rest.items() if k != "research"})
 
-    # Handle interactive mode at blueprint stage
-    if args.stage == "blueprint" or (args.interactive and "blueprint" in outputs):
+    # Handle interactive mode at blueprint stage.
+    # Only trigger when we actually stopped at blueprint (not when produce ran).
+    if args.stage == "blueprint" or (args.interactive and stop_after == "blueprint" and "blueprint" in outputs):
         blueprint = outputs["blueprint"]
 
         # Also save to local file for easy editing
@@ -604,10 +606,15 @@ def _write_or_print(output: str, path: str | None) -> None:
 
 
 def _extract_tags(content: str) -> list[str] | None:
-    """Extract hashtags from content's last non-empty line (optimize format)."""
-    lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
-    if not lines:
-        return None
-    last = lines[-1]
-    tags = [w for w in last.split() if w.startswith("#")]
+    """Extract hashtags from content. Scans all lines because optimize may
+    append publish_notes after the hashtag line."""
+    tags: list[str] = []
+    for line in content.splitlines():
+        line = line.strip()
+        if line.startswith("#") and not line.startswith("# "):
+            # Hashtag line (not a markdown heading)
+            tags.extend(w for w in line.split() if w.startswith("#"))
+        elif tags and not line.startswith("#"):
+            # Found hashtags already, next non-hashtag line means we're past them
+            break
     return tags if tags else None

@@ -169,9 +169,9 @@ def _format_platform_content(item: Any) -> str:
     if isinstance(hashtags, list) and hashtags:
         parts.append(" ".join(h for h in hashtags if h))
 
-    notes = str(item.get("publish_notes") or "").strip()
-    if notes:
-        parts.append(f"\n> 📌 {notes}")
+    # publish_notes is an internal advisory, NOT content to publish.
+    # Write it to a separate .notes file instead of polluting the promo .md
+    # (which gets loaded by fill/publish and sent to public platforms).
 
     return "\n\n".join(p for p in parts if p).strip()
 

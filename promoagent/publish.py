@@ -310,6 +310,8 @@ NO_API_PLATFORMS = {
     "xhs":         "小红书（无公开发布 API，请手动发布）",
     "zhihu":       "知乎（无公开发布 API，请手动发布）",
     "wechat":      "微信（需企业认证公众号，请手动发布）",
+    "producthunt": "Product Hunt（需网页提交，请手动发布）",
+    "showhn":      "Show HN（需网页提交，请手动发布）",
 }
 
 # Aliases that resolve to canonical platform keys for publishing.

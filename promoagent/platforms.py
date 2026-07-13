@@ -60,6 +60,7 @@ PLATFORMS: dict[str, PlatformSpec] = {
         api_support=False,
         best_for="Visual storytelling, lifestyle",
         aspect_ratio="3:4",
+        critic_weights={"fidelity": 0.8, "engagement": 1.4, "alignment": 0.8},
     ),
     "zhihu": PlatformSpec(
         key="zhihu",
@@ -119,6 +120,7 @@ PLATFORMS: dict[str, PlatformSpec] = {
         api_support=True,
         best_for="Quick announcements",
         aspect_ratio="16:9",
+        critic_weights={"fidelity": 0.8, "engagement": 1.3, "alignment": 0.9},
     ),
     "linkedin": PlatformSpec(
         key="linkedin",

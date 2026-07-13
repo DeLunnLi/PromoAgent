@@ -1574,7 +1574,8 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("1/ 第一推", rendered)
         self.assertIn("2/ 第二推", rendered)
         self.assertIn("#foo #bar", rendered)
-        self.assertIn("📌 建议晚上发", rendered)
+        # publish_notes is internal advisory, not rendered into promo files.
+        self.assertNotIn("建议晚上发", rendered)
 
     def test_optimize_twitter_thread_rendered(self):
         """Twitter threads are rendered as numbered posts, not dropped."""
@@ -1620,7 +1621,8 @@ class PythonCoreTest(unittest.TestCase):
         self.assertIn("Show HN: Repo Pulse", tw)
         self.assertIn("1/ 推文1", tw)
         self.assertIn("#showhn", tw)
-        self.assertIn("首发后转发", tw)
+        # publish_notes is an internal advisory, NOT written to promo .md files.
+        self.assertNotIn("首发后转发", tw)
 
     def test_optimize_with_images_false_skips_image_generation(self):
         result = analyze_target("healthy-repo", cwd=FIXTURES)
@@ -1882,7 +1884,7 @@ class PythonCoreTest(unittest.TestCase):
     def test_find_examples_no_key_returns_empty_or_ai(self):
         result = analyze_free_text("上海火锅店推广")
         env_backup = {k: os.environ.pop(k, None) for k in [
-            "TAVILY_API_KEY", "PROMOAGENT_API_KEY", "PROMOAGENT_MODELSCOPE_API_KEY",
+            "TAVILY_API_KEY", "EXA_API_KEY", "PROMOAGENT_API_KEY", "PROMOAGENT_MODELSCOPE_API_KEY",
             "OPENAI_API_KEY", "MODELSCOPE_API_KEY",
         ]}
         try:

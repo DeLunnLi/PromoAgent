@@ -268,6 +268,7 @@ class PipelineState:
         # corrupts state. The atomic file write (os.replace) handles disk; this
         # handles the shared Python object.
         self._lock = threading.RLock()
+        self._dirty = False
         self._load()
 
     def _load(self) -> None:
@@ -307,6 +308,10 @@ class PipelineState:
         with self._lock:
             self.stages[stage] = data
             self.save()
+
+    def flush(self) -> None:
+        """No-op compatibility stub — set() writes immediately."""
+        pass
 
     def has(self, stage: str) -> bool:
         with self._lock:
@@ -495,6 +500,7 @@ def stage_research(
     }
 
     state.set("research", output)
+    state.flush()
     return output
 
 
@@ -704,6 +710,7 @@ def stage_blueprint(
     }
 
     state.set("blueprint", output)
+    state.flush()
     return output
 
 
@@ -758,6 +765,8 @@ def edit_blueprint(
         _apply_set_structure(data, edits["_setStructure"], record)
 
     blueprint["data"] = data
+    # Update timestamp so downstream cache (is_stale) detects the edit.
+    blueprint["timestamp"] = time.time()
     return blueprint
 
 
@@ -1378,6 +1387,7 @@ def stage_produce(
     }
 
     state.set("produce", output)
+    state.flush()
     return output
 
 

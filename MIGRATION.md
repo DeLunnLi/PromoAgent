@@ -128,7 +128,7 @@ promoagent draft --resume --edit edits.json
 - **主动搜索参考广告**：`draft` 在 research 阶段自动搜同品类真实帖子/广告塞进 prompt（`--no-search` 可关）。复用 `examples.find_examples`（Tavily + Exa + AI 三路）。
 - **research 缺口追问**：`--interactive` 模式下，research 跑完读取 `facts.gaps` 逐条向用户追问，答案合并进 blueprint 的 prompt。
 - **MCP server**：`promoagent serve` 或 `promoagent-mcp` 启动 stdio MCP server，暴露 9 个工具（analyze / research / blueprint / edit_blueprint / produce / draft / image_brief / build_image_prompt / list_platforms），供 Claude Desktop / Cursor 调用。`serve` 不再是 Web UI。
-- **CLI 清理**：移除 `web.py`（Gradio）、旧版 `mcp_server.py`、`interactive.py`、`promo_prompts.py`。`web` extra（gradio）已从 pyproject 删除。
+- **CLI 清理**：移除 `web.py`（Gradio）、`interactive.py`、`promo_prompts.py`。旧版 `mcp_server.py` 已被新版替换（基于 v0.4 draft pipeline，9 个工具）。`web` extra（gradio）已从 pyproject 删除。
 
 ## 主要改进
 
