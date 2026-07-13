@@ -297,7 +297,12 @@ class PipelineState:
             indent=2,
         )
         tmp = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
-        tmp.write_text(payload, encoding="utf-8")
+        # Write with restricted permissions (owner-only) before atomic replace.
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, payload.encode("utf-8"))
+        finally:
+            os.close(fd)
         os.replace(tmp, self.state_file)
 
     def get(self, stage: str) -> dict[str, Any] | None:

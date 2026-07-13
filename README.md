@@ -271,7 +271,7 @@ without re-running earlier stages.
 |----------|-------------|---------|
 | `PROMOAGENT_API_KEY` | OpenAI-compatible API key | - |
 | `PROMOAGENT_MODEL` | Model name | `gpt-4o-mini` |
-| `PROMOAGENT_BASE_URL` | API base URL | `https://api.openai.com/v1` |
+| `PROMOAGENT_BASE_URL` | API base URL | Auto-detected per provider |
 | `PROMOAGENT_MAX_TOKENS` | Max generation tokens | `4096` |
 | `PROMOAGENT_TEMPERATURE` | Generation temperature | `0.7` |
 | `TAVILY_API_KEY` | Tavily search API | - |

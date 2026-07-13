@@ -209,7 +209,7 @@ def _run_fill(args: argparse.Namespace) -> int:
             # Extract hashtags from content if present (optimize writes them as
             # the last line, e.g. "#tag1 #tag2"). Pass to filler so XHS etc.
             # can fill the tag field.
-            tags = _extract_tags(content) if not args.content else None
+            tags = _extract_tags(content)
             print_info(f"Filling {plat}...")
             fill_platform(plat, content, title=args.title, tags=tags, headless=not args.no_headless)
             print_success(f"Done: {plat}")

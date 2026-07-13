@@ -1771,11 +1771,13 @@ class PythonCoreTest(unittest.TestCase):
         """fill all should return canonical keys (xhs), not display names (小红书)."""
         from promoagent.browser import list_supported_platforms
         platforms = list_supported_platforms()
-        self.assertTrue(len(platforms) > 0)
-        # Must contain canonical keys that _FILLERS recognizes.
+        self.assertTrue(len(platforms) >= 3, "expected at least 3 fill platforms")
+        # Every returned key must be a _FILLERS key (not a display name).
+        from promoagent.browser import _FILLERS
         for p in platforms:
-            from promoagent.browser import _FILLERS
             self.assertIn(p, _FILLERS, f"{p} must be a _FILLERS key")
+        # Must include core platforms.
+        self.assertIn("xhs", platforms)
 
     def test_publish_xhs_alias_resolved(self):
         """publish xhs should resolve to xiaohongshu (manual platform), not 'Unknown'."""
@@ -1828,6 +1830,7 @@ class PythonCoreTest(unittest.TestCase):
             ui.console = old
         out = buf.getvalue()
         self.assertIn("quality:", out)
+        # 12 = fidelity(4)+engagement(3)+alignment(5); 15 = 3 axes × 5 max.
         self.assertIn("12/15", out)
         self.assertIn("rewritten", out)
 
@@ -1836,7 +1839,9 @@ class PythonCoreTest(unittest.TestCase):
             [str(ROOT / "bin" / "promoagent"), "--version"],
             cwd=ROOT, text=True, capture_output=True, check=True,
         )
-        self.assertEqual(result.stdout.strip(), "0.4.0")
+        # Reference __version__ dynamically so version bumps don't break this test.
+        from promoagent import __version__
+        self.assertEqual(result.stdout.strip(), __version__)
 
     # ------------------------------------------------------------------
     # .env loading
